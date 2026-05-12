@@ -44,7 +44,9 @@ go.work.sum
 # nfpm temp files
 nfpm_*.yaml.tmp
 
-# Benchmark output
+# Benchmark output and compiled helpers
 benchmark/results/
 benchmark/*.log
 benchmark/*.csv
+benchmark/gen/gen
+benchmark/sampler/sampler
