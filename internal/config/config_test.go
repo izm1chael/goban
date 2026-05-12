@@ -75,19 +75,19 @@ func TestValidate(t *testing.T) {
 		mutate  func(*Config)
 		wantErr bool
 	}{
-		"valid":               {func(*Config) {}, false},
-		"missing_source":      {func(c *Config) { c.Rules[0].Source = "nope" }, true},
-		"missing_regex":       {func(c *Config) { c.Rules[0].Regex = "" }, true},
-		"regex_no_ip_capture": {func(c *Config) { c.Rules[0].Regex = `Failed from (\S+)` }, true},
-		"bad_regex":           {func(c *Config) { c.Rules[0].Regex = `(?P<ip>` }, true},
-		"duplicate_source":    {func(c *Config) { c.Sources = append(c.Sources, c.Sources[0]) }, true},
-		"unknown_source_type": {func(c *Config) { c.Sources[0].Type = "weird" }, true},
-		"file_no_path":        {func(c *Config) { c.Sources[0].Path = "" }, true},
-		"zero_findtime":       {func(c *Config) { c.Rules[0].FindTime = 0 }, true},
-		"zero_bantime":        {func(c *Config) { c.Rules[0].BanTime = 0 }, true},
-		"rule_allowlist_ok":   {func(c *Config) { c.Rules[0].Allowlist = []string{"10.0.0.0/8", "203.0.113.50/32"} }, false},
-		"rule_allowlist_bad":  {func(c *Config) { c.Rules[0].Allowlist = []string{"not-a-cidr"} }, true},
-		"rule_allowlist_all":  {func(c *Config) { c.Rules[0].Allowlist = []string{"0.0.0.0/0"} }, true},
+		"valid":                 {func(*Config) {}, false},
+		"missing_source":        {func(c *Config) { c.Rules[0].Source = "nope" }, true},
+		"missing_regex":         {func(c *Config) { c.Rules[0].Regex = "" }, true},
+		"regex_no_ip_capture":   {func(c *Config) { c.Rules[0].Regex = `Failed from (\S+)` }, true},
+		"bad_regex":             {func(c *Config) { c.Rules[0].Regex = `(?P<ip>` }, true},
+		"duplicate_source":      {func(c *Config) { c.Sources = append(c.Sources, c.Sources[0]) }, true},
+		"unknown_source_type":   {func(c *Config) { c.Sources[0].Type = "weird" }, true},
+		"file_no_path":          {func(c *Config) { c.Sources[0].Path = "" }, true},
+		"zero_findtime":         {func(c *Config) { c.Rules[0].FindTime = 0 }, true},
+		"zero_bantime":          {func(c *Config) { c.Rules[0].BanTime = 0 }, true},
+		"rule_allowlist_ok":     {func(c *Config) { c.Rules[0].Allowlist = []string{"10.0.0.0/8", "203.0.113.50/32"} }, false},
+		"rule_allowlist_bad":    {func(c *Config) { c.Rules[0].Allowlist = []string{"not-a-cidr"} }, true},
+		"rule_allowlist_all":    {func(c *Config) { c.Rules[0].Allowlist = []string{"0.0.0.0/0"} }, true},
 		"rule_allowlist_v6_all": {func(c *Config) { c.Rules[0].Allowlist = []string{"::/0"} }, true},
 	}
 

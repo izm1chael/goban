@@ -31,28 +31,28 @@ const (
 
 // Config is the top-level GoBan configuration.
 type Config struct {
-	LogLevel       string         `yaml:"log_level"`
-	LogFile        string         `yaml:"log_file"`
-	SocketPath     string         `yaml:"sock_path"`
-	SocketMode     uint32         `yaml:"socket_mode"`
-	SocketGroup    string         `yaml:"socket_group"`
-	Allowlist      []string       `yaml:"allowlist"`
-	Defaults       RuleDefaults   `yaml:"defaults"`
-	Sources        []SourceConfig `yaml:"sources"`
-	Rules          []RuleConfig   `yaml:"rules"`
-	RulesDir       string         `yaml:"rules_dir"`
-	ReplayOnStart  bool           `yaml:"replay_on_start"`
-	FlushOnExit    bool           `yaml:"flush_on_exit"`
-	IPv6           bool           `yaml:"ipv6"`
-	IPSetNameV4    string         `yaml:"ipset_name_v4"`
-	IPSetNameV6    string         `yaml:"ipset_name_v6"`
-	Banner             BannerConfig  `yaml:"banner"`
-	StrikeChanSize     int           `yaml:"strike_chan_size"`
-	DryRun             bool          `yaml:"dry_run"`
-	BatchBans          bool          `yaml:"batch_bans"`
-	AuditLog           string        `yaml:"audit_log"`
-	StatePath          string        `yaml:"state_path"`
-	StateSaveInterval  time.Duration `yaml:"state_save_interval"`
+	LogLevel          string         `yaml:"log_level"`
+	LogFile           string         `yaml:"log_file"`
+	SocketPath        string         `yaml:"sock_path"`
+	SocketMode        uint32         `yaml:"socket_mode"`
+	SocketGroup       string         `yaml:"socket_group"`
+	Allowlist         []string       `yaml:"allowlist"`
+	Defaults          RuleDefaults   `yaml:"defaults"`
+	Sources           []SourceConfig `yaml:"sources"`
+	Rules             []RuleConfig   `yaml:"rules"`
+	RulesDir          string         `yaml:"rules_dir"`
+	ReplayOnStart     bool           `yaml:"replay_on_start"`
+	FlushOnExit       bool           `yaml:"flush_on_exit"`
+	IPv6              bool           `yaml:"ipv6"`
+	IPSetNameV4       string         `yaml:"ipset_name_v4"`
+	IPSetNameV6       string         `yaml:"ipset_name_v6"`
+	Banner            BannerConfig   `yaml:"banner"`
+	StrikeChanSize    int            `yaml:"strike_chan_size"`
+	DryRun            bool           `yaml:"dry_run"`
+	BatchBans         bool           `yaml:"batch_bans"`
+	AuditLog          string         `yaml:"audit_log"`
+	StatePath         string         `yaml:"state_path"`
+	StateSaveInterval time.Duration  `yaml:"state_save_interval"`
 }
 
 // BannerConfig selects the kernel firewall backend and its tunables. The
@@ -199,51 +199,71 @@ func (c *Config) Validate() error {
 	if c.IPv6 && c.IPSetNameV6 == "" {
 		return fmt.Errorf("ipset_name_v6 must not be empty when ipv6 is true")
 	}
+	if err := c.validateBanner(); err != nil {
+		return err
+	}
+	srcNames, err := c.validateSources()
+	if err != nil {
+		return err
+	}
+	return c.validateRules(srcNames)
+}
+
+func (c *Config) validateBanner() error {
 	switch c.Banner.Backend {
 	case "", "iptables", "nftables":
 		// ok; "" maps to iptables in the daemon constructor
 	default:
 		return fmt.Errorf("banner.backend %q: must be iptables or nftables", c.Banner.Backend)
 	}
-	if c.Banner.Backend == "nftables" {
-		if c.Banner.Table == "" {
-			return fmt.Errorf("banner.table must not be empty when backend=nftables")
-		}
-		if c.Banner.SetV4 == "" {
-			return fmt.Errorf("banner.set_v4 must not be empty when backend=nftables")
-		}
-		if c.IPv6 && c.Banner.SetV6 == "" {
-			return fmt.Errorf("banner.set_v6 must not be empty when ipv6 is true and backend=nftables")
-		}
-		if c.Banner.Chain == "" {
-			return fmt.Errorf("banner.chain must not be empty when backend=nftables")
-		}
+	if c.Banner.Backend != "nftables" {
+		return nil
 	}
-	srcNames := map[string]struct{}{}
+	if c.Banner.Table == "" {
+		return fmt.Errorf("banner.table must not be empty when backend=nftables")
+	}
+	if c.Banner.SetV4 == "" {
+		return fmt.Errorf("banner.set_v4 must not be empty when backend=nftables")
+	}
+	if c.IPv6 && c.Banner.SetV6 == "" {
+		return fmt.Errorf("banner.set_v6 must not be empty when ipv6 is true and backend=nftables")
+	}
+	if c.Banner.Chain == "" {
+		return fmt.Errorf("banner.chain must not be empty when backend=nftables")
+	}
+	return nil
+}
+
+func (c *Config) validateSources() (map[string]struct{}, error) {
+	names := make(map[string]struct{}, len(c.Sources))
 	for i, s := range c.Sources {
 		if s.Name == "" {
-			return fmt.Errorf("sources[%d]: name must not be empty", i)
+			return nil, fmt.Errorf("sources[%d]: name must not be empty", i)
 		}
-		if _, dup := srcNames[s.Name]; dup {
-			return fmt.Errorf("sources[%d]: duplicate name %q", i, s.Name)
+		if _, dup := names[s.Name]; dup {
+			return nil, fmt.Errorf("sources[%d]: duplicate name %q", i, s.Name)
 		}
-		srcNames[s.Name] = struct{}{}
+		names[s.Name] = struct{}{}
 		switch s.Type {
 		case "file":
 			if s.Path == "" {
-				return fmt.Errorf("sources[%d] %q: file source requires path", i, s.Name)
+				return nil, fmt.Errorf("sources[%d] %q: file source requires path", i, s.Name)
 			}
 		case "docker":
 			if s.Container == "" && len(s.Labels) == 0 {
-				return fmt.Errorf("sources[%d] %q: docker source requires container or labels", i, s.Name)
+				return nil, fmt.Errorf("sources[%d] %q: docker source requires container or labels", i, s.Name)
 			}
 		case "journal":
 			// Match is optional (empty == follow whole journal).
 		default:
-			return fmt.Errorf("sources[%d] %q: unknown type %q (want file|docker|journal)", i, s.Name, s.Type)
+			return nil, fmt.Errorf("sources[%d] %q: unknown type %q (want file|docker|journal)", i, s.Name, s.Type)
 		}
 	}
-	ruleNames := map[string]struct{}{}
+	return names, nil
+}
+
+func (c *Config) validateRules(srcNames map[string]struct{}) error {
+	ruleNames := make(map[string]struct{}, len(c.Rules))
 	for i, r := range c.Rules {
 		if r.Name == "" {
 			return fmt.Errorf("rules[%d]: name must not be empty", i)
@@ -255,40 +275,44 @@ func (c *Config) Validate() error {
 		if _, ok := srcNames[r.Source]; !ok {
 			return fmt.Errorf("rules[%d] %q: source %q not defined", i, r.Name, r.Source)
 		}
-		if r.Regex == "" {
-			return fmt.Errorf("rules[%d] %q: regex must not be empty", i, r.Name)
+		if err := validateRuleConfig(i, r); err != nil {
+			return err
 		}
-		re, err := regexp.Compile(r.Regex)
-		if err != nil {
-			return fmt.Errorf("rules[%d] %q: invalid regex: %w", i, r.Name, err)
+	}
+	return nil
+}
+
+func validateRuleConfig(i int, r RuleConfig) error {
+	if r.Regex == "" {
+		return fmt.Errorf("rules[%d] %q: regex must not be empty", i, r.Name)
+	}
+	re, err := regexp.Compile(r.Regex)
+	if err != nil {
+		return fmt.Errorf("rules[%d] %q: invalid regex: %w", i, r.Name, err)
+	}
+	if !hasIPCapture(re) {
+		return fmt.Errorf("rules[%d] %q: regex must contain a named capture group (?P<ip>...)", i, r.Name)
+	}
+	if r.MaxRetries < 1 {
+		return fmt.Errorf("rules[%d] %q: max_retries must be >= 1", i, r.Name)
+	}
+	if r.FindTime <= 0 {
+		return fmt.Errorf("rules[%d] %q: findtime must be > 0", i, r.Name)
+	}
+	if r.BanTime <= 0 {
+		return fmt.Errorf("rules[%d] %q: bantime must be > 0", i, r.Name)
+	}
+	for j, cidr := range r.Allowlist {
+		if cidr == "0.0.0.0/0" || cidr == "::/0" {
+			return fmt.Errorf("rules[%d] %q: allowlist[%d]=%q would disable the rule (refused)", i, r.Name, j, cidr)
 		}
-		if !hasIPCapture(re) {
-			return fmt.Errorf("rules[%d] %q: regex must contain a named capture group (?P<ip>...)", i, r.Name)
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("rules[%d] %q: allowlist[%d]=%q: %w", i, r.Name, j, cidr, err)
 		}
-		if r.MaxRetries < 1 {
-			return fmt.Errorf("rules[%d] %q: max_retries must be >= 1", i, r.Name)
-		}
-		if r.FindTime <= 0 {
-			return fmt.Errorf("rules[%d] %q: findtime must be > 0", i, r.Name)
-		}
-		if r.BanTime <= 0 {
-			return fmt.Errorf("rules[%d] %q: bantime must be > 0", i, r.Name)
-		}
-		for j, cidr := range r.Allowlist {
-			if cidr == "0.0.0.0/0" || cidr == "::/0" {
-				return fmt.Errorf("rules[%d] %q: allowlist[%d]=%q would disable the rule (refused)", i, r.Name, j, cidr)
-			}
-			if _, err := netip.ParsePrefix(cidr); err != nil {
-				return fmt.Errorf("rules[%d] %q: allowlist[%d]=%q: %w", i, r.Name, j, cidr, err)
-			}
-		}
-		// Datepattern validation: must resolve to a known preset or a raw
-		// Go layout literal. Done here so misconfig fails at config-load
-		// rather than per-line at runtime.
-		if r.Datepattern != "" {
-			if _, err := datepatternResolve(r.Datepattern); err != nil {
-				return fmt.Errorf("rules[%d] %q: %w", i, r.Name, err)
-			}
+	}
+	if r.Datepattern != "" {
+		if _, err := datepatternResolve(r.Datepattern); err != nil {
+			return fmt.Errorf("rules[%d] %q: %w", i, r.Name, err)
 		}
 	}
 	return nil

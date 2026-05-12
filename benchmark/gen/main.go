@@ -4,19 +4,19 @@
 //
 // Two operating modes:
 //
-//   1. Fixed run (default): writes at --rate for --duration then exits.
+//  1. Fixed run (default): writes at --rate for --duration then exits.
 //
-//   2. Soak mode (--control-fifo PATH): reads commands from a FIFO so the
-//      orchestrator can change rate, cardinality, or trigger bursts without
-//      restarting the generator. Commands are newline-terminated text:
+//  2. Soak mode (--control-fifo PATH): reads commands from a FIFO so the
+//     orchestrator can change rate, cardinality, or trigger bursts without
+//     restarting the generator. Commands are newline-terminated text:
 //
-//        rate <n>           change steady rate (lines/sec)
-//        ips <n>            grow unique IP pool to n (only grows, never shrinks)
-//        burst <n> <sec>    burst at <n> lines/sec for <sec> seconds, then resume
-//        rotate <newpath>   reopen log file (caller has already mv'd the path)
-//        quit               exit
+//     rate <n>           change steady rate (lines/sec)
+//     ips <n>            grow unique IP pool to n (only grows, never shrinks)
+//     burst <n> <sec>    burst at <n> lines/sec for <sec> seconds, then resume
+//     rotate <newpath>   reopen log file (caller has already mv'd the path)
+//     quit               exit
 //
-//      Stats are appended to --stats-out as CSV: t_sec,lines_written.
+//     Stats are appended to --stats-out as CSV: t_sec,lines_written.
 //
 // No cryptographic randomness is used; outputs are deterministic for given
 // flags/commands, which is desirable for reproducibility.
@@ -32,12 +32,12 @@ import (
 )
 
 type state struct {
-	mu        sync.Mutex
-	rate      int
-	ips       []string
+	mu         sync.Mutex
+	rate       int
+	ips        []string
 	burstUntil time.Time
 	burstRate  int
-	rotateTo  string
+	rotateTo   string
 }
 
 func main() {

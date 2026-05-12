@@ -68,9 +68,9 @@ type IPTables struct {
 
 	// runner handles iptables/ip6tables shell-exec (one-time chain-rule
 	// install at Setup); the hot path goes through ipsetCmd.
-	runner    Runner
-	ipsetCmd  IPSetCommander
-	ownIPSet  bool // we created ipsetCmd ourselves and should Close it
+	runner   Runner
+	ipsetCmd IPSetCommander
+	ownIPSet bool // we created ipsetCmd ourselves and should Close it
 
 	mu     sync.Mutex
 	ruleOf map[netip.Addr]string // rule attribution for /banned listing

@@ -17,17 +17,17 @@ type StatusResp struct {
 
 // RuleInfo is one entry in GET /rules.
 type RuleInfo struct {
-	Name       string         `json:"name"`
-	Source     string         `json:"source"`
-	Regex      string         `json:"regex,omitempty"`
-	Threshold  int            `json:"threshold"`
-	FindTime   time.Duration  `json:"findtime"`
-	BanTime    time.Duration  `json:"bantime"`
-	Tracked    int            `json:"tracked"`
-	Hits       uint64         `json:"hits"`
-	Bans       uint64         `json:"bans"`
-	Misses     uint64         `json:"misses"`
-	Strikes    map[string]int `json:"strikes,omitempty"`
+	Name      string         `json:"name"`
+	Source    string         `json:"source"`
+	Regex     string         `json:"regex,omitempty"`
+	Threshold int            `json:"threshold"`
+	FindTime  time.Duration  `json:"findtime"`
+	BanTime   time.Duration  `json:"bantime"`
+	Tracked   int            `json:"tracked"`
+	Hits      uint64         `json:"hits"`
+	Bans      uint64         `json:"bans"`
+	Misses    uint64         `json:"misses"`
+	Strikes   map[string]int `json:"strikes,omitempty"`
 }
 
 // BanInfo is one entry in GET /banned.

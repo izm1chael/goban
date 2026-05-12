@@ -173,12 +173,12 @@ func TestValidIPSetName(t *testing.T) {
 		name    string
 		wantErr bool
 	}{
-		"normal":         {"goban-ban-v4", false},
-		"empty":          {"", true},
-		"too_long":       {"this-name-is-thirty-two-chars-1234", true},
-		"with_slash":     {"goban/ban", true},
-		"with_space":     {"goban ban", true},
-		"with_null":      {"goban\x00ban", true},
+		"normal":     {"goban-ban-v4", false},
+		"empty":      {"", true},
+		"too_long":   {"this-name-is-thirty-two-chars-1234", true},
+		"with_slash": {"goban/ban", true},
+		"with_space": {"goban ban", true},
+		"with_null":  {"goban\x00ban", true},
 	}
 	for n, tc := range cases {
 		t.Run(n, func(t *testing.T) {

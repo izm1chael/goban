@@ -103,7 +103,7 @@ func (c *Client) buildNewSet(seq uint32, table, name string, family EntryFamily)
 // The expression list is the heart of nftables. We emit three expressions:
 //   - payload: load saddr into register 1
 //   - lookup:  if register 1 is in @set, fall through (no early verdict);
-//              otherwise jump to end of chain
+//     otherwise jump to end of chain
 //   - immediate: load NF_DROP verdict into the verdict register
 //
 // The kernel encodes lookup "match" semantics as: if the key IS in the

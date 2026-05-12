@@ -13,9 +13,9 @@ import (
 //
 // The expected YAML shape is either a bare list:
 //
-//	- name: sshd
-//	  source: auth-log
-//	  regex: 'Failed password for (?:invalid user )?\S+ from (?P<ip>\S+)'
+//   - name: sshd
+//     source: auth-log
+//     regex: 'Failed password for (?:invalid user )?\S+ from (?P<ip>\S+)'
 //
 // or a wrapper object with a top-level "rules:" key:
 //

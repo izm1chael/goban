@@ -13,11 +13,11 @@ import (
 
 // countingBanner is a thin Banner that records every BanBatch / Ban call.
 type countingBanner struct {
-	mu       sync.Mutex
-	batches  []int // sizes of received batches
-	bans     atomic.Int64
-	unbans   atomic.Int64
-	listErr  error
+	mu      sync.Mutex
+	batches []int // sizes of received batches
+	bans    atomic.Int64
+	unbans  atomic.Int64
+	listErr error
 }
 
 func (c *countingBanner) Setup(_ context.Context) error { return nil }

@@ -51,10 +51,10 @@ const (
 
 // Attribute IDs that live inside IPSET_ATTR_DATA for hash:ip sets.
 const (
-	attrIP        uint16 = 1 // nested (contains IPV4 or IPV6)
-	attrTimeout   uint16 = 6 // u32, network byte order
-	attrHashSize  uint16 = 9 // u32, network byte order
-	attrMaxElem   uint16 = 10
+	attrIP       uint16 = 1 // nested (contains IPV4 or IPV6)
+	attrTimeout  uint16 = 6 // u32, network byte order
+	attrHashSize uint16 = 9 // u32, network byte order
+	attrMaxElem  uint16 = 10
 )
 
 // IP address attribute IDs (inside IPSET_ATTR_IP).

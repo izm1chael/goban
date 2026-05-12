@@ -17,12 +17,12 @@ import (
 // IPSet kernel error codes (from include/uapi/linux/netfilter/ipset/ip_set.h).
 // The kernel returns these as the errno in NLMSG_ERROR responses.
 const (
-	ipsetErrPrivate    = 4096
-	ipsetErrProtocol   = 4097
-	ipsetErrFindType   = 4098
-	ipsetErrMaxSets    = 4099
-	ipsetErrExist      = 4103 // entry already in set / set already exists
-	ipsetErrInvalidIP  = 4104
+	ipsetErrPrivate   = 4096
+	ipsetErrProtocol  = 4097
+	ipsetErrFindType  = 4098
+	ipsetErrMaxSets   = 4099
+	ipsetErrExist     = 4103 // entry already in set / set already exists
+	ipsetErrInvalidIP = 4104
 )
 
 // Client talks to the kernel ipset subsystem over a netfilter netlink socket.

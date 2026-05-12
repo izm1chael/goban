@@ -145,8 +145,8 @@ func (d *Daemon) Reload(_ context.Context) error {
 
 // reloadPlan is the diff between the running state and the new config.
 type reloadPlan struct {
-	stopRules        []string             // rule names to tear down (removed OR changed)
-	addRules         []config.RuleConfig  // rules to construct (added OR changed)
+	stopRules        []string            // rule names to tear down (removed OR changed)
+	addRules         []config.RuleConfig // rules to construct (added OR changed)
 	addSources       []config.SourceConfig
 	keepSource       map[string]bool // source names still referenced
 	allowlistChanged bool

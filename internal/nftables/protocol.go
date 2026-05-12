@@ -47,15 +47,15 @@ const (
 // nf_tables command types (NFT_MSG_*). Encoded into the top 8 bits of
 // nlmsghdr.Type along with subsysNFTables in the bottom 8 bits.
 const (
-	cmdNewTable    uint8 = 0
-	cmdDelTable    uint8 = 2
-	cmdNewChain    uint8 = 3
-	cmdNewRule     uint8 = 6
-	cmdNewSet      uint8 = 9
-	cmdGetSet      uint8 = 10
-	cmdNewSetElem  uint8 = 12
-	cmdGetSetElem  uint8 = 13
-	cmdDelSetElem  uint8 = 14
+	cmdNewTable   uint8 = 0
+	cmdDelTable   uint8 = 2
+	cmdNewChain   uint8 = 3
+	cmdNewRule    uint8 = 6
+	cmdNewSet     uint8 = 9
+	cmdGetSet     uint8 = 10
+	cmdNewSetElem uint8 = 12
+	cmdGetSetElem uint8 = 13
+	cmdDelSetElem uint8 = 14
 )
 
 // Netfilter address families used in nfgenmsg.nfgen_family.
@@ -209,13 +209,13 @@ const (
 
 // NFTA_SET_* — set attribute IDs.
 const (
-	attrSetTable    uint16 = 1
-	attrSetName     uint16 = 2
-	attrSetFlags    uint16 = 3
-	attrSetKeyType  uint16 = 4
-	attrSetKeyLen   uint16 = 5
-	attrSetID       uint16 = 10
-	attrSetTimeout  uint16 = 11
+	attrSetTable   uint16 = 1
+	attrSetName    uint16 = 2
+	attrSetFlags   uint16 = 3
+	attrSetKeyType uint16 = 4
+	attrSetKeyLen  uint16 = 5
+	attrSetID      uint16 = 10
+	attrSetTimeout uint16 = 11
 )
 
 // nft set flags.
