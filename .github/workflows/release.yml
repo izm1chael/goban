@@ -1,0 +1,200 @@
+# Release workflow: triggered by pushing a semver tag (e.g. v1.0.0).
+# Three sequential jobs:
+#   packages → cross-compile amd64 + arm64 binaries, build deb/rpm/archlinux
+#              packages, upload as artifacts
+#   docker   → multi-arch Docker image (linux/amd64 + linux/arm64) pushed to
+#              ghcr.io/izm1chael/goban:latest and :<tag>
+#   release  → create a GitHub Release with all artifacts attached and
+#              auto-generated release notes
+#
+# To cut a release:
+#   git tag v1.0.0
+#   git push --tags
+#
+# The first time: tag v0.0.1-rc1 to smoke-test the workflow without
+# committing the v1.0.0 name to a broken artifact.
+#
+# Security posture:
+#   - Trigger is restricted to tags matching v*.*.* (no arbitrary refs)
+#   - The tag name (github.ref_name) is passed into run: commands ONLY via
+#     env: pass-through. It is never interpolated directly into shell.
+#   - No untrusted github.event.* fields (PR titles, commit messages, issue
+#     bodies, etc.) are used in this workflow.
+#   - Auth uses the repo's own GITHUB_TOKEN with explicitly-declared
+#     permissions: contents:write and packages:write.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NFPM_VERSION: '2.42.1'
+
+jobs:
+  packages:
+    name: build packages (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Compute version (strip the leading v)
+        id: ver
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version="${REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building goban $version for linux/${{ matrix.arch }}"
+
+      - name: Build binaries
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          mkdir -p bin
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
+            go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
+            -o bin/goban-daemon ./cmd/goban-daemon
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
+            go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
+            -o bin/goban-client ./cmd/goban-client
+
+      - name: Install nfpm
+        run: |
+          curl -fsSL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          sudo tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+          nfpm --version | head -2
+
+      - name: Gzip man pages (nfpm reads them from man/*.gz)
+        run: |
+          gzip -fk man/goban-daemon.8
+          gzip -fk man/goban-client.1
+          ls -lh man/
+
+      - name: Build .deb, .rpm, .pkg.tar.zst
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          mkdir -p dist
+          cd packaging
+          for fmt in deb rpm archlinux; do
+            nfpm pkg --packager "$fmt" --config nfpm.yaml --target ../dist/
+          done
+          ls -lh ../dist/
+
+      - name: Rename binaries for release attach
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mv bin/goban-daemon "bin/goban-daemon-linux-$ARCH"
+          mv bin/goban-client "bin/goban-client-linux-$ARCH"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.arch }}
+          path: |
+            dist/
+            bin/goban-daemon-linux-${{ matrix.arch }}
+            bin/goban-client-linux-${{ matrix.arch }}
+          retention-days: 7
+
+  docker:
+    name: multi-arch docker image
+    runs-on: ubuntu-latest
+    needs: packages
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/izm1chael/goban:latest
+            ghcr.io/izm1chael/goban:${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/izm1chael/goban
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: github release
+    runs-on: ubuntu-latest
+    needs: [packages, docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: packages-*
+          merge-multiple: true
+
+      - name: List collected artifacts
+        run: |
+          echo "=== dist/ ==="; ls -lh artifacts/dist/ || true
+          echo "=== binaries ==="; ls -lh artifacts/goban-* || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            # Debian / Ubuntu / Mint / Raspbian
+            sudo apt install ./goban_*_amd64.deb     # or _arm64.deb
+
+            # Fedora / RHEL / Rocky / Alma
+            sudo dnf install ./goban-*.x86_64.rpm    # or .aarch64.rpm
+
+            # Arch / Manjaro / EndeavourOS
+            sudo pacman -U ./goban-*-x86_64.pkg.tar.zst   # or -aarch64.pkg.tar.zst
+
+            # Docker (multi-arch — pull resolves automatically)
+            docker pull ghcr.io/izm1chael/goban:${{ github.ref_name }}
+            ```
+
+            See [README](https://github.com/izm1chael/goban#readme) for full quickstart.
+          files: |
+            artifacts/dist/*.deb
+            artifacts/dist/*.rpm
+            artifacts/dist/*.pkg.tar.zst
+            artifacts/goban-daemon-*
+            artifacts/goban-client-*

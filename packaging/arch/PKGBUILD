@@ -1,0 +1,50 @@
+# Maintainer: izm1chael <izm1chael@users.noreply.github.com>
+#
+# Build locally from this directory:
+#   cd packaging/arch && VERSION=1.0.0 makepkg -sf
+# Or via the top-level Makefile:
+#   make package-arch VERSION=1.0.0
+#
+# To submit to AUR (Arch User Repository):
+#   1. clone aur@aur.archlinux.org:goban.git
+#   2. copy this PKGBUILD + .install into it
+#   3. updpkgsums; makepkg --printsrcinfo > .SRCINFO
+#   4. git push
+# Users then do `yay -S goban` (or any AUR helper).
+
+pkgname=goban
+pkgver=${VERSION:-1.0.0}
+pkgrel=1
+pkgdesc='Fast fail2ban replacement — netlink ipset banner, container-native'
+arch=('x86_64')
+url='https://github.com/izm1chael/goban'
+license=('MIT')
+depends=('iptables' 'ipset')
+makedepends=('go')
+backup=('etc/goban/goban.yaml')
+install="${pkgname}.install"
+# When packaged via `make package-arch`, this references the local tree.
+# For an AUR-style fetch-from-tarball build, replace `source` with a
+# https://github.com/.../archive/v${pkgver}.tar.gz URL and a real sha256.
+source=("local::file:///$(realpath ../..)")
+sha256sums=('SKIP')
+
+build() {
+    cd "${srcdir}/local"
+    export CGO_ENABLED=0
+    go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-daemon ./cmd/goban-daemon
+    go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-client ./cmd/goban-client
+}
+
+package() {
+    cd "${srcdir}/local"
+    install -Dm755 goban-daemon "${pkgdir}/usr/bin/goban-daemon"
+    install -Dm755 goban-client "${pkgdir}/usr/bin/goban-client"
+    install -Dm644 deploy/goban.service "${pkgdir}/usr/lib/systemd/system/goban.service"
+    install -Dm644 deploy/goban-persist.service "${pkgdir}/usr/lib/systemd/system/goban-persist.service"
+    install -Dm644 examples/goban.yaml "${pkgdir}/etc/goban/goban.yaml"
+    install -d "${pkgdir}/etc/goban/rules.d"
+    install -Dm644 examples/rules.d/*.yaml -t "${pkgdir}/etc/goban/rules.d/"
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
+}

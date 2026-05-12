@@ -1,0 +1,33 @@
+# Recidive — escalates bans for repeat offenders.
+#
+# Watches GoBan's own audit log (one JSON line per ban applied) and re-bans
+# any IP that has been banned 5 or more times in the last 24 hours, for a
+# week. The pattern below is anchored to the audit log's stable field order
+# (action → ip → rule).
+#
+# How to wire this up:
+#   1. Make sure `audit_log` is set in goban.yaml (default
+#      /var/log/goban/audit.log).
+#   2. Define a source pointed at the same path:
+#
+#        sources:
+#          - type: file
+#            name: audit
+#            path: /var/log/goban/audit.log
+#
+#   3. Drop this file into /etc/goban/rules.d/ (or wherever your rules_dir
+#      points). Reload with `goban-client reload` or SIGHUP.
+#
+# Feedback-loop protection: this rule's `excludes` filter ignores audit
+# events whose own rule is "recidive". As a defense-in-depth measure, a
+# rule named exactly "recidive" auto-applies that exclude even if you
+# delete the line below — you'd have to rename this rule AND remove the
+# exclude to defeat the safety net.
+- name: recidive
+  source: audit
+  regex: '"action":"ban".*?"ip":"(?P<ip>[^"]+)".*?"rule":"(?P<rule>[^"]+)"'
+  excludes:
+    rule: recidive
+  max_retries: 5
+  findtime: 24h
+  bantime: 168h

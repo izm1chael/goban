@@ -1,0 +1,18 @@
+[DEFAULT]
+banaction = iptables-ipset-proto6
+banaction_allports = iptables-ipset-proto6
+logtarget = /tmp/soak-fail2ban.log
+socket = /tmp/soak-f2b.sock
+pidfile = /tmp/soak-f2b.pid
+loglevel = WARNING
+dbfile = /tmp/soak-f2b.sqlite3
+dbpurgeage = 1d
+
+[sshd-bench]
+enabled = true
+filter = sshd-bench
+logpath = /tmp/soak-auth.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+backend = polling

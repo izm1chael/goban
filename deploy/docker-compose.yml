@@ -1,0 +1,34 @@
+# Smoke-test docker compose for GoBan.
+#
+# Bring up the stack with `docker compose up --build` from this directory.
+# After a few seconds an "attacker" container loops bad-credential POSTs at a
+# victim nginx; GoBan's nginx-http-auth rule should trip after 5 failures and
+# the attacker container's curls will start hanging (DROP on host firewall).
+#
+# Verify with:
+#   docker compose exec goban goban-client list
+#   sudo ipset list goban-ban-v4
+
+services:
+  goban:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: goban:latest
+    container_name: goban
+    # --network host so iptables rules reach the host kernel, and so docker
+    # sources can see sibling containers via the docker socket.
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./goban.yaml:/etc/goban/goban.yaml:ro
+      - ./rules.d:/etc/goban/rules.d:ro
+      - goban-run:/run/goban
+    restart: unless-stopped
+
+volumes:
+  goban-run:

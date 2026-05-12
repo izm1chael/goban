@@ -1,0 +1,50 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Build artifacts
+*.tar.gz
+*.deb
+*.rpm
+*.pkg.tar.zst
+coverage.out
+coverage.html
+# gzipped man pages are produced from troff sources by `make man`
+man/*.gz
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~
+Thumbs.db
+
+# Local config / secrets
+*.local.yaml
+.env
+.env.local
+*.pem
+*.key
+*.crt
+
+# Runtime artifacts
+/run/
+*.pid
+*.sock
+
+# Go workspace / vendor
+/vendor/
+go.work
+go.work.sum
+
+# nfpm temp files
+nfpm_*.yaml.tmp
+
+# Benchmark output
+benchmark/results/
+benchmark/*.log
+benchmark/*.csv

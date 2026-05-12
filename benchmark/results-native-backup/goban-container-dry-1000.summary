@@ -1,0 +1,10 @@
+invalid value "\n0" for flag -pid: parse error
+Usage of ./sampler/sampler:
+  -duration duration
+    	max run time (0 = until PID exits)
+  -interval duration
+    	sampling interval (default 200ms)
+  -out string
+    	CSV output path (default stdout)
+  -pid int
+    	PID to watch

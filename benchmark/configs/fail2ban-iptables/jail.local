@@ -1,0 +1,17 @@
+# fail2ban benchmark jail config — real iptables mode (ipset for fairness).
+[DEFAULT]
+banaction = iptables-ipset-proto6
+banaction_allports = iptables-ipset-proto6
+logtarget = /tmp/bench-fail2ban.log
+socket = /tmp/fail2ban-bench.sock
+pidfile = /tmp/fail2ban-bench.pid
+loglevel = WARNING
+
+[sshd-bench]
+enabled = true
+filter = sshd-bench
+logpath = /tmp/bench-auth.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+backend = polling

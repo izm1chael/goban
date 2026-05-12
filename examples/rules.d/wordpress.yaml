@@ -1,0 +1,18 @@
+# WordPress login brute force. Matches POST /wp-login.php returning 200 (failed
+# logins on most WP themes return 200 with an error page) or POST /xmlrpc.php
+# which is the classic XML-RPC amplification vector.
+# Source defaults to "nginx-access" — adjust to "apache-access" if appropriate.
+rules:
+  - name: wordpress-login
+    source: nginx-access
+    regex: '^(?P<ip>\S+) .* "POST /wp-login\.php[^"]*" (?:200|401|403)'
+    max_retries: 5
+    findtime: 10m
+    bantime: 6h
+
+  - name: wordpress-xmlrpc
+    source: nginx-access
+    regex: '^(?P<ip>\S+) .* "POST /xmlrpc\.php'
+    max_retries: 3
+    findtime: 10m
+    bantime: 12h

@@ -1,0 +1,58 @@
+# Arch's pacman runs these hooks at install/upgrade/remove. Equivalent of
+# the deb/rpm postinst.sh and postrm.sh.
+
+post_install() {
+    if ! getent group goban >/dev/null 2>&1; then
+        groupadd --system goban
+    fi
+    if ! getent passwd goban >/dev/null 2>&1; then
+        useradd --system --gid goban --no-create-home \
+                --shell /usr/sbin/nologin --comment "GoBan daemon" goban
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    cat <<'EOF'
+
+GoBan installed successfully.
+
+Next steps:
+  1. Review /etc/goban/goban.yaml and the rule bundles in /etc/goban/rules.d/
+  2. Enable + start the daemon:
+       sudo systemctl enable --now goban
+
+Test a rule offline before deploying it:
+  sudo goban-client test --rule sshd /var/log/auth.log
+
+Docs: https://github.com/izm1chael/goban
+
+EOF
+}
+
+post_upgrade() {
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl try-reload-or-restart goban >/dev/null 2>&1 || true
+}
+
+post_remove() {
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    cat <<'EOF'
+
+GoBan removed.
+
+The following are intentionally NOT deleted:
+  /etc/goban/            — your config and rule bundles
+  /var/lib/goban/        — persisted strike state
+  /var/log/goban/        — audit log
+  goban system user/group
+  Active kernel ipset entries (existing bans remain until reboot)
+
+To purge everything:
+  sudo rm -rf /etc/goban /var/lib/goban /var/log/goban
+  sudo ipset destroy goban-ban-v4 2>/dev/null || true
+  sudo ipset destroy goban-ban-v6 2>/dev/null || true
+  sudo userdel goban && sudo groupdel goban
+
+EOF
+}

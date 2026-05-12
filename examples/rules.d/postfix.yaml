@@ -1,0 +1,23 @@
+# Postfix SMTP brute force / probing. Define a source named "mail-log"
+# pointing at /var/log/mail.log.
+rules:
+  - name: postfix-sasl
+    source: mail-log
+    regex: 'warning: \S+\[(?P<ip>[^\]]+)\]: SASL (?:LOGIN|PLAIN|CRAM-MD5|DIGEST-MD5) authentication failed'
+    max_retries: 5
+    findtime: 10m
+    bantime: 12h
+
+  - name: postfix-rbl
+    source: mail-log
+    regex: 'NOQUEUE: reject: RCPT from \S+\[(?P<ip>[^\]]+)\]: 554 5\.7\.1 Service unavailable'
+    max_retries: 3
+    findtime: 10m
+    bantime: 24h
+
+  - name: postfix-banned-helo
+    source: mail-log
+    regex: 'NOQUEUE: reject: \S+ from \S+\[(?P<ip>[^\]]+)\]: 504 5\.5\.2 <[^>]+>: Helo command rejected'
+    max_retries: 3
+    findtime: 10m
+    bantime: 24h

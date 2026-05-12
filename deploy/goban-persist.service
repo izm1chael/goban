@@ -1,0 +1,15 @@
+[Unit]
+Description=Persist GoBan ipset entries across reboot
+Documentation=https://github.com/izm1chael/goban
+After=ipset.service iptables.service
+Before=goban.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/install -d -m 0700 /var/lib/goban
+ExecStart=/bin/sh -c 'test -s /var/lib/goban/ipset.dump && /usr/sbin/ipset restore -exist -f /var/lib/goban/ipset.dump || true'
+ExecStop=/bin/sh -c '/usr/sbin/ipset save > /var/lib/goban/ipset.dump.tmp && mv /var/lib/goban/ipset.dump.tmp /var/lib/goban/ipset.dump'
+
+[Install]
+WantedBy=multi-user.target

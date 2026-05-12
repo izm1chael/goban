@@ -1,0 +1,23 @@
+# Apache HTTPD rules. Define a source named "apache-error" (error log) and/or
+# "apache-access" (combined access log) to use these.
+rules:
+  - name: apache-auth
+    source: apache-error
+    regex: '\[client (?P<ip>[^\]:]+)(?::\d+)?\] (?:user .* authentication failure|user .* not found|password mismatch)'
+    max_retries: 5
+    findtime: 10m
+    bantime: 6h
+
+  - name: apache-noscript
+    source: apache-access
+    regex: '^(?P<ip>\S+) .* "(?:GET|POST|HEAD) [^"]*\.(?:php|asp|aspx|cgi|pl|exe)[^"]*" (?:404|403)'
+    max_retries: 6
+    findtime: 10m
+    bantime: 6h
+
+  - name: apache-overflows
+    source: apache-error
+    regex: '\[client (?P<ip>[^\]:]+)(?::\d+)?\] (?:Invalid (?:URI in request|method in request)|request failed: URI too long)'
+    max_retries: 2
+    findtime: 10m
+    bantime: 24h

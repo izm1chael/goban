@@ -1,0 +1,18 @@
+# fail2ban benchmark jail config — no-action mode.
+# Equivalent to GoBan's dry_run pass.
+[DEFAULT]
+banaction = dummy
+banaction_allports = dummy
+logtarget = /tmp/bench-fail2ban.log
+socket = /tmp/fail2ban-bench.sock
+pidfile = /tmp/fail2ban-bench.pid
+loglevel = WARNING
+
+[sshd-bench]
+enabled = true
+filter = sshd-bench
+logpath = /tmp/bench-auth.log
+maxretry = 5
+findtime = 600
+bantime = 3600
+backend = polling

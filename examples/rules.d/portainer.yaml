@@ -1,0 +1,9 @@
+# Portainer (the Docker management UI) login bruteforce.
+# Source should be a docker source named "portainer-container".
+rules:
+  - name: portainer-login
+    source: portainer-container
+    regex: '"(?:msg|message)":"[Uu]nauthorized"[^}]*"(?:client|ip|origin)":"(?P<ip>[^"]+)"'
+    max_retries: 5
+    findtime: 10m
+    bantime: 6h

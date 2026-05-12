@@ -1,0 +1,18 @@
+# Nextcloud login failures. Source can be either a file source pointing at
+# /var/www/nextcloud/data/nextcloud.log OR a docker source streaming the
+# container's stdout (Nextcloud's Docker images log to stdout by default).
+rules:
+  - name: nextcloud-login
+    source: nextcloud-container
+    regex: 'Login failed: .* Remote IP: (?P<ip>[^"\s]+)'
+    max_retries: 5
+    findtime: 10m
+    bantime: 1h
+
+  - name: nextcloud-bruteforce
+    source: nextcloud-container
+    # Nextcloud 25+ also emits structured bruteforce-protection events.
+    regex: '"message":"[^"]*[Bb]ruteforce[^"]*"[^}]*"remoteAddr":"(?P<ip>[^"]+)"'
+    max_retries: 3
+    findtime: 5m
+    bantime: 6h

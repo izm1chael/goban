@@ -1,0 +1,122 @@
+.\" goban-client man page — install to /usr/share/man/man1/goban-client.1.gz
+.TH GOBAN-CLIENT 1 "May 2026" "goban 1.0" "User Commands"
+.SH NAME
+goban-client \- talk to a running goban-daemon
+.SH SYNOPSIS
+.B goban-client
+[\-\-sock \fIPATH\fR]
+[\-\-json]
+.I COMMAND
+[\fIARGS\fR]
+.SH DESCRIPTION
+.B goban-client
+is the control plane for
+.BR goban-daemon (8).
+It connects to the daemon's unix socket and issues commands: status
+queries, manual bans / unbans, rule introspection, config reload, and
+offline rule testing.
+.SH COMMANDS
+.TP
+.B status
+Print daemon version, uptime, source / rule counts and total ban
+counter.
+.TP
+.B rules
+List configured rules with hit / ban / miss counters, sliding-window
+length, ban duration, and date-parse / drift fallback counts. Use this
+to debug rule misconfiguration.
+.TP
+.B "list" | " banned"
+List currently active bans with each entry's TTL and expiration.
+.TP
+.B "ban " \fIIP\fR " \-\-rule " \fILABEL\fR " [\-\-ttl " \fIDURATION\fR "]"
+Manually ban an IP. The \fIrule\fR label is required and recorded in the
+audit log; use \fBmanual\fR or a custom string to be explicit. Default
+TTL is 1h.
+.TP
+.B "unban " \fIIP\fR
+Remove an active ban. Tolerates missing entries (ENOENT is treated as
+success).
+.TP
+.B reload
+Reload configuration from disk. The daemon validates the new config
+before swapping; if validation fails, the previous configuration stays
+running. Equivalent to sending SIGHUP.
+.TP
+.B "test \-\-rule " \fINAME\fR " " \fILOGFILE\fR " | " \-
+Dry-run a loaded rule against a log file (or stdin). Reports per-IP
+simulated bans with first-seen and ban times. Does not modify daemon
+state. Use to verify a new regex before reloading.
+.TP
+.B version
+Print client version.
+.SH GLOBAL FLAGS
+.TP
+.B \-\-sock " " \fIPATH\fR
+Override the daemon socket path. Default
+.IR /run/goban/goban.sock .
+.TP
+.B \-\-json
+Emit machine-readable JSON instead of formatted text. Applies to status,
+rules and banned.
+.SH EXAMPLES
+Show daemon status:
+.PP
+.RS 4
+.nf
+$ goban\-client status
+version:    1.0.0
+uptime:     2h13m47s
+sources:    3
+rules:      12
+total bans: 47
+.fi
+.RE
+.PP
+Manually ban an IP for 12 hours:
+.PP
+.RS 4
+.nf
+$ goban\-client ban 198.51.100.7 \-\-rule manual \-\-ttl 12h
+banned 198.51.100.7 for 12h0m0s (rule=manual)
+.fi
+.RE
+.PP
+Test the sshd rule against a captured log file:
+.PP
+.RS 4
+.nf
+$ goban\-client test \-\-rule sshd /var/log/auth.log.1
+.fi
+.RE
+.PP
+Tail recent bans in JSON for piping into a SIEM:
+.PP
+.RS 4
+.nf
+$ goban\-client \-\-json banned | jq .
+.fi
+.RE
+.SH PERMISSIONS
+The daemon's socket defaults to mode 0660 owned by root:goban. Add a
+user to the
+.B goban
+group to permit unprivileged
+.B goban-client
+use. Failed attempts to talk to the socket exit non-zero with an
+explicit error.
+.SH EXIT STATUS
+.TP
+.B 0
+Command succeeded.
+.TP
+.B 1
+Command failed (socket unreachable, invalid args, daemon-side error).
+.TP
+.B 2
+Usage error (bad command name or missing required arg).
+.SH SEE ALSO
+.BR goban-daemon (8),
+.BR fail2ban-client (1)
+.SH AUTHOR
+GoBan is developed by izm1chael. License: MIT.

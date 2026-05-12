@@ -1,0 +1,20 @@
+# OpenSSH brute force / scanner protection.
+# Matches both "invalid user" (anonymous scanners) and "Failed password" against
+# known accounts. Source defaults to "auth-log" — change if your config uses a
+# different source name.
+rules:
+  - name: sshd
+    source: auth-log
+    regex: 'Failed password for (?:invalid user )?\S+ from (?P<ip>\S+) port'
+    max_retries: 3
+    findtime: 10m
+    bantime: 24h
+
+  - name: sshd-aggressive
+    source: auth-log
+    # Catches a wider set of sshd failure modes including key-exchange aborts
+    # and "User X from <ip> not allowed because not listed in AllowUsers".
+    regex: '(?:Invalid user|Failed (?:password|keyboard-interactive|publickey)|User \S+ from|Connection (?:closed|reset) by (?:invalid user )?\S+) (?:.*?from )?(?P<ip>\S+)(?: port|$)'
+    max_retries: 5
+    findtime: 10m
+    bantime: 24h
