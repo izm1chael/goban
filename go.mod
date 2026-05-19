@@ -7,7 +7,7 @@ require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/nxadm/tail v1.4.11
 	github.com/rs/zerolog v1.35.1
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
