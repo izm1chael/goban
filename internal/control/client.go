@@ -49,6 +49,13 @@ func (c *Client) Rules(ctx context.Context) ([]RuleInfo, error) {
 	return out, err
 }
 
+// Sources retrieves /sources.
+func (c *Client) Sources(ctx context.Context) ([]SourceInfo, error) {
+	var out []SourceInfo
+	err := c.get(ctx, "/sources", &out)
+	return out, err
+}
+
 // Banned retrieves /banned.
 func (c *Client) Banned(ctx context.Context) ([]BanInfo, error) {
 	var out []BanInfo

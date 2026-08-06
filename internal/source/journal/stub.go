@@ -50,4 +50,9 @@ func (s *Source) Subscribe(_ string, _ int) <-chan source.LogLine {
 func (s *Source) Unsubscribe(_ string) {}
 
 // Close is a no-op for the stub.
+// Health reports that journald support is unavailable in this build.
+func (s *Source) Health() source.Health {
+	return source.Health{Name: s.name, Status: "degraded", LastError: "journald support not compiled in"}
+}
+
 func (s *Source) Close() error { return nil }

@@ -26,7 +26,7 @@ RUN go build -trimpath \
 # ---- runtime ----
 FROM alpine:3.20
 
-# iptables for INPUT-chain rule management, ipset for the O(1) ban-set
+# iptables for INPUT/FORWARD rule management, ipset for the O(1) ban-set
 # storage, ip6tables for the ipv6 path.
 RUN apk add --no-cache \
       iptables \
@@ -40,10 +40,14 @@ RUN apk add --no-cache \
 COPY --from=builder /out/goban-daemon /usr/local/bin/goban-daemon
 COPY --from=builder /out/goban-client /usr/local/bin/goban-client
 COPY examples/goban.yaml      /etc/goban/goban.yaml
-COPY examples/rules.d         /etc/goban/rules.d
+COPY examples/rules.d         /usr/share/goban/rules-available
+RUN mkdir -p /etc/goban/rules.d \
+ && cp /usr/share/goban/rules-available/sshd.yaml /etc/goban/rules.d/ \
+ && cp /usr/share/goban/rules-available/recidive.yaml /etc/goban/rules.d/
 
 # /run/goban holds the unix control socket.
-RUN mkdir -p /run/goban && chown goban:goban /run/goban
+RUN mkdir -p /run/goban /var/lib/goban /var/log/goban \
+ && chown goban:goban /run/goban
 
 # The daemon must run as root because it shells out to iptables, ip6tables
 # and ipset to manipulate kernel netfilter state. This is an unavoidable
@@ -51,7 +55,7 @@ RUN mkdir -p /run/goban && chown goban:goban /run/goban
 # management daemon — there is no userspace path to managing iptables rules.
 #
 # Mitigations layered on top of this privilege footprint:
-#   - allowlist auto-loads local interfaces + RFC1918 so the daemon cannot
+#   - allowlist auto-loads only the host's exact interface addresses so it cannot
 #     accidentally ban its own host;
 #   - the exec runner in internal/banner/iptables.go restricts subprocesses
 #     to a literal-only switch over {ipset, iptables, ip6tables};

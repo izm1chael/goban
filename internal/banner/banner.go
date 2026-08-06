@@ -5,6 +5,7 @@ package banner
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"time"
 )
@@ -50,4 +51,14 @@ type Banner interface {
 	Unban(ctx context.Context, ip netip.Addr) error
 	List(ctx context.Context) ([]BanInfo, error)
 	Close(ctx context.Context, flush bool) error
+}
+
+func validateTTL(ttl time.Duration) error {
+	if ttl < time.Second {
+		return fmt.Errorf("ban ttl %s is below the kernel-safe minimum of 1s", ttl)
+	}
+	if ttl/time.Second > time.Duration(^uint32(0)) {
+		return fmt.Errorf("ban ttl %s exceeds the kernel timeout maximum", ttl)
+	}
+	return nil
 }

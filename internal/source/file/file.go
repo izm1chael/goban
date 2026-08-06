@@ -1,5 +1,4 @@
-// Package file implements a Source backed by a tailed file with rotation
-// support.
+// Package file implements a bounded, rotation-aware file follower.
 package file
 
 import (
@@ -7,116 +6,250 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
-
-	"github.com/nxadm/tail"
 
 	"github.com/izm1chael/goban/internal/source"
 )
 
-// Source tails one file and fans out lines to subscribers.
+const followPollInterval = 200 * time.Millisecond
+
+// Source follows one file and fans out bounded lines to subscribers.
 type Source struct {
 	name   string
 	path   string
 	replay bool
 	maxLen int
 
-	hub *source.Hub
-	t   *tail.Tail
+	hub    *source.Hub
+	health source.RuntimeHealth
+
+	mu     sync.Mutex
+	f      *os.File
+	cancel context.CancelFunc
+	closed bool
 }
 
 // Config holds the file source's runtime parameters.
 type Config struct {
 	Name       string
 	Path       string
-	Replay     bool // false = skip to end of file at start
-	MaxLineLen int  // truncate longer lines before broadcast
+	Replay     bool // false = skip to end of a file that exists at Start
+	MaxLineLen int
 }
 
-// New constructs a file Source.
 func New(cfg Config) *Source {
 	if cfg.MaxLineLen <= 0 {
 		cfg.MaxLineLen = 16 * 1024
 	}
-	return &Source{
-		name:   cfg.Name,
-		path:   cfg.Path,
-		replay: cfg.Replay,
-		maxLen: cfg.MaxLineLen,
-		hub:    source.NewHub(),
-	}
+	return &Source{name: cfg.Name, path: cfg.Path, replay: cfg.Replay, maxLen: cfg.MaxLineLen, hub: source.NewHub()}
 }
 
-// Name returns the configured source name.
 func (s *Source) Name() string { return s.name }
 
-// Start opens the file with nxadm/tail and begins broadcasting lines.
+// Start validates the containing directory, opens the current file when it
+// exists, and starts a bounded follower. A missing file is allowed and will be
+// picked up from byte zero when created after startup.
 func (s *Source) Start(ctx context.Context) error {
-	location := &tail.SeekInfo{Offset: 0, Whence: io.SeekEnd}
-	if s.replay {
-		location = &tail.SeekInfo{Offset: 0, Whence: io.SeekStart}
+	s.health.Starting()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("file source is closed")
 	}
-	t, err := tail.TailFile(s.path, tail.Config{
-		Follow:    true,
-		ReOpen:    true,
-		MustExist: false,
-		Logger:    tail.DiscardingLogger,
-		Location:  location,
-	})
+	runCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	s.mu.Unlock()
+
+	if st, err := os.Stat(filepath.Dir(s.path)); err != nil || !st.IsDir() {
+		cancel()
+		if err != nil {
+			return fmt.Errorf("source directory %s: %w", filepath.Dir(s.path), err)
+		}
+		return fmt.Errorf("source directory %s is not a directory", filepath.Dir(s.path))
+	}
+
+	f, info, offset, err := s.openInitial()
 	if err != nil {
-		return fmt.Errorf("tail %s: %w", s.path, err)
+		cancel()
+		s.health.Error(err)
+		return err
 	}
-	s.t = t
-	go s.run(ctx)
+	s.setFile(f)
+	s.health.Running()
+	go s.run(runCtx, f, info, offset)
 	return nil
 }
 
-func (s *Source) run(ctx context.Context) {
+func (s *Source) openInitial() (*os.File, os.FileInfo, int64, error) {
+	f, err := os.Open(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, 0, nil
+	}
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("open %s: %w", s.path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, 0, fmt.Errorf("stat %s: %w", s.path, err)
+	}
+	offset := int64(0)
+	if !s.replay {
+		offset, err = f.Seek(0, io.SeekEnd)
+		if err != nil {
+			_ = f.Close()
+			return nil, nil, 0, fmt.Errorf("seek %s: %w", s.path, err)
+		}
+	}
+	return f, info, offset, nil
+}
+
+func (s *Source) openFromStart() (*os.File, os.FileInfo, error) {
+	f, err := os.Open(s.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return f, info, nil
+}
+
+func (s *Source) run(ctx context.Context, f *os.File, info os.FileInfo, offset int64) {
 	defer s.hub.Close()
-	defer func() { _ = s.t.Stop() }()
+	defer s.health.Stopped()
+	defer func() { s.setFile(nil) }()
+
+	acc := source.NewBoundedAccumulator(s.maxLen)
+	buf := make([]byte, 32*1024)
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
+			if f != nil {
+				_ = f.Close()
+			}
 			return
-		case line, ok := <-s.t.Lines:
-			if !ok {
-				return
-			}
-			if line == nil {
+		}
+		if f == nil {
+			var err error
+			f, info, err = s.openFromStart()
+			if errors.Is(err, os.ErrNotExist) {
+				if !sleepContext(ctx, followPollInterval) {
+					return
+				}
 				continue
 			}
-			if line.Err != nil && !errors.Is(line.Err, io.EOF) {
+			if err != nil {
+				s.health.Error(fmt.Errorf("open %s: %w", s.path, err))
+				if !sleepContext(ctx, time.Second) {
+					return
+				}
 				continue
 			}
-			txt := line.Text
-			if len(txt) > s.maxLen {
-				txt = txt[:s.maxLen]
-			}
-			s.hub.Broadcast(source.LogLine{
-				Source: s.name,
-				Text:   txt,
-				Time:   time.Now(),
+			offset = 0
+			acc.Reset()
+			s.setFile(f)
+			s.health.Running()
+		}
+
+		n, err := f.Read(buf)
+		if n > 0 {
+			offset += int64(n)
+			acc.Feed(buf[:n], func(text string) bool {
+				now := time.Now()
+				s.health.Event(now)
+				s.hub.Broadcast(source.LogLine{Source: s.name, Text: text, Time: now, ReceivedAt: now})
+				return ctx.Err() == nil
 			})
+		}
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, io.EOF) {
+			if ctx.Err() == nil {
+				s.health.Error(fmt.Errorf("read %s: %w", s.path, err))
+			}
+			_ = f.Close()
+			f, info, offset = nil, nil, 0
+			s.setFile(nil)
+			acc.Reset()
+			continue
+		}
+
+		pathInfo, statErr := os.Stat(s.path)
+		switch {
+		case statErr == nil && info != nil && !os.SameFile(info, pathInfo):
+			_ = f.Close()
+			f, info, offset = nil, nil, 0
+			s.setFile(nil)
+			acc.Reset()
+			continue
+		case statErr == nil && pathInfo.Size() < offset:
+			if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+				s.health.Error(fmt.Errorf("rewind truncated %s: %w", s.path, seekErr))
+				_ = f.Close()
+				f, info = nil, nil
+				s.setFile(nil)
+			} else {
+				offset = 0
+			}
+			acc.Reset()
+			continue
+		case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+			s.health.Error(fmt.Errorf("stat %s: %w", s.path, statErr))
+		}
+		if !sleepContext(ctx, followPollInterval) {
+			_ = f.Close()
+			return
 		}
 	}
 }
 
-// Subscribe returns the line channel for a named subscriber.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+func (s *Source) setFile(f *os.File) {
+	s.mu.Lock()
+	s.f = f
+	s.mu.Unlock()
+}
+
 func (s *Source) Subscribe(name string, bufSize int) <-chan source.LogLine {
 	return s.hub.Subscribe(name, bufSize)
 }
+func (s *Source) Unsubscribe(name string) { s.hub.Unsubscribe(name) }
+func (s *Source) Health() source.Health   { return s.health.Snapshot(s.name, s.hub) }
 
-// Unsubscribe removes a subscriber and closes its channel; used during
-// daemon.Reload to drop rules that are no longer configured.
-func (s *Source) Unsubscribe(name string) {
-	s.hub.Unsubscribe(name)
-}
-
-// Close stops the tailer and closes all subscriber channels.
 func (s *Source) Close() error {
-	if s.t != nil {
-		_ = s.t.Stop()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	f := s.f
+	s.f = nil
+	s.mu.Unlock()
+	if f != nil {
+		_ = f.Close()
 	}
 	s.hub.Close()
+	s.health.Stopped()
 	return nil
 }

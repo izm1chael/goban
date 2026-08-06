@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Audit is an append-only JSON-lines logger for administrative actions
-// performed against the control plane (manual ban / unban). Writes are
+// Audit is an append-only JSON-lines logger for confirmed automatic and
+// manual ban/unban actions. Writes are
 // serialized by a mutex; the underlying writer is `*os.File` in production
 // or a `*bytes.Buffer` in tests.
 //
@@ -26,9 +26,9 @@ import (
 //	  "source": "manual"
 //	}
 //
-// The control server appends a line only on the SUCCESS path of /ban and
-// /unban — failed attempts are deliberately not audited so the file stays
-// useful as a "what was applied" timeline.
+// The daemon appends a line only after a successful firewall operation;
+// failed attempts are deliberately not audited so the file remains an
+// accurate "what was applied" timeline.
 type Audit struct {
 	mu sync.Mutex
 	w  io.Writer
@@ -60,12 +60,12 @@ func NewAuditFile(path string) (*Audit, func() error, error) {
 // NewAuditWriter wraps an arbitrary io.Writer (used by tests).
 func NewAuditWriter(w io.Writer) *Audit { return &Audit{w: w} }
 
-// Log appends one event as a JSON line. If the underlying writer fails the
-// error is silently swallowed — audit logging must not break the control
-// plane.
-func (a *Audit) Log(ev AuditEvent) {
+// Log appends one event as a JSON line. Audit failure never rolls back an
+// already-confirmed firewall operation, but it is returned so the daemon can
+// surface degraded recidive/forensics coverage instead of failing silently.
+func (a *Audit) Log(ev AuditEvent) error {
 	if a == nil {
-		return
+		return nil
 	}
 	if ev.Time.IsZero() {
 		ev.Time = time.Now().UTC()
@@ -74,8 +74,15 @@ func (a *Audit) Log(ev AuditEvent) {
 	defer a.mu.Unlock()
 	b, err := json.Marshal(ev)
 	if err != nil {
-		return
+		return err
 	}
 	b = append(b, '\n')
-	_, _ = a.w.Write(b)
+	n, err := a.w.Write(b)
+	if err != nil {
+		return err
+	}
+	if n != len(b) {
+		return io.ErrShortWrite
+	}
+	return nil
 }

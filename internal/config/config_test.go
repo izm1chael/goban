@@ -51,6 +51,7 @@ rules:
 	if cfg.LogLevel != "debug" {
 		t.Errorf("LogLevel = %q, want debug", cfg.LogLevel)
 	}
+	cfg.ApplyRuleDefaults()
 	if cfg.Rules[0].MaxRetries != 3 {
 		t.Errorf("rule inherited MaxRetries = %d, want 3", cfg.Rules[0].MaxRetries)
 	}
@@ -75,20 +76,41 @@ func TestValidate(t *testing.T) {
 		mutate  func(*Config)
 		wantErr bool
 	}{
-		"valid":                 {func(*Config) {}, false},
-		"missing_source":        {func(c *Config) { c.Rules[0].Source = "nope" }, true},
-		"missing_regex":         {func(c *Config) { c.Rules[0].Regex = "" }, true},
-		"regex_no_ip_capture":   {func(c *Config) { c.Rules[0].Regex = `Failed from (\S+)` }, true},
-		"bad_regex":             {func(c *Config) { c.Rules[0].Regex = `(?P<ip>` }, true},
-		"duplicate_source":      {func(c *Config) { c.Sources = append(c.Sources, c.Sources[0]) }, true},
-		"unknown_source_type":   {func(c *Config) { c.Sources[0].Type = "weird" }, true},
-		"file_no_path":          {func(c *Config) { c.Sources[0].Path = "" }, true},
-		"zero_findtime":         {func(c *Config) { c.Rules[0].FindTime = 0 }, true},
-		"zero_bantime":          {func(c *Config) { c.Rules[0].BanTime = 0 }, true},
-		"rule_allowlist_ok":     {func(c *Config) { c.Rules[0].Allowlist = []string{"10.0.0.0/8", "203.0.113.50/32"} }, false},
-		"rule_allowlist_bad":    {func(c *Config) { c.Rules[0].Allowlist = []string{"not-a-cidr"} }, true},
-		"rule_allowlist_all":    {func(c *Config) { c.Rules[0].Allowlist = []string{"0.0.0.0/0"} }, true},
-		"rule_allowlist_v6_all": {func(c *Config) { c.Rules[0].Allowlist = []string{"::/0"} }, true},
+		"valid":                   {func(*Config) {}, false},
+		"missing_source":          {func(c *Config) { c.Rules[0].Source = "nope" }, true},
+		"missing_regex":           {func(c *Config) { c.Rules[0].Regex = "" }, true},
+		"regex_no_ip_capture":     {func(c *Config) { c.Rules[0].Regex = `Failed from (\S+)` }, true},
+		"bad_regex":               {func(c *Config) { c.Rules[0].Regex = `(?P<ip>` }, true},
+		"duplicate_source":        {func(c *Config) { c.Sources = append(c.Sources, c.Sources[0]) }, true},
+		"unknown_source_type":     {func(c *Config) { c.Sources[0].Type = "weird" }, true},
+		"file_no_path":            {func(c *Config) { c.Sources[0].Path = "" }, true},
+		"zero_findtime":           {func(c *Config) { c.Rules[0].FindTime = 0 }, true},
+		"zero_bantime":            {func(c *Config) { c.Rules[0].BanTime = 0 }, true},
+		"subsecond_bantime":       {func(c *Config) { c.Rules[0].BanTime = 500 * time.Millisecond }, true},
+		"bad_rule_name":           {func(c *Config) { c.Rules[0].Name = "../../escape" }, true},
+		"datepattern_no_capture":  {func(c *Config) { c.Rules[0].Datepattern = "iso8601" }, true},
+		"exclude_unknown_capture": {func(c *Config) { c.Rules[0].Excludes = map[string]string{"user": "root"} }, true},
+		"rule_allowlist_ok":       {func(c *Config) { c.Rules[0].Allowlist = []string{"10.0.0.0/8", "203.0.113.50/32"} }, false},
+		"rule_allowlist_bad":      {func(c *Config) { c.Rules[0].Allowlist = []string{"not-a-cidr"} }, true},
+		"rule_allowlist_all":      {func(c *Config) { c.Rules[0].Allowlist = []string{"0.0.0.0/0"} }, true},
+		"rule_allowlist_v6_all":   {func(c *Config) { c.Rules[0].Allowlist = []string{"::/0"} }, true},
+		"trusted_proxy_ok": {func(c *Config) {
+			c.Rules[0].Regex = `peer=(?P<peer>\S+) client=(?P<ip>\S+)`
+			c.Rules[0].TrustedProxyCapture = "peer"
+			c.Rules[0].TrustedProxies = []string{"10.0.0.0/8", "2001:db8::/32"}
+		}, false},
+		"trusted_proxy_missing_capture": {func(c *Config) {
+			c.Rules[0].TrustedProxies = []string{"10.0.0.0/8"}
+		}, true},
+		"trusted_proxy_unknown_capture": {func(c *Config) {
+			c.Rules[0].TrustedProxyCapture = "peer"
+			c.Rules[0].TrustedProxies = []string{"10.0.0.0/8"}
+		}, true},
+		"trusted_proxy_all": {func(c *Config) {
+			c.Rules[0].Regex = `peer=(?P<peer>\S+) client=(?P<ip>\S+)`
+			c.Rules[0].TrustedProxyCapture = "peer"
+			c.Rules[0].TrustedProxies = []string{"0.0.0.0/0"}
+		}, true},
 	}
 
 	for name, tc := range cases {
@@ -133,4 +155,59 @@ func TestApplyEnvOverrides(t *testing.T) {
 func writeFile(t *testing.T, path, body string) error {
 	t.Helper()
 	return writeFileBytes(path, []byte(body))
+}
+
+func TestLoadConfigRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "goban.yaml")
+	if err := writeFile(t, path, "bantmie: 1h\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfigFromFile(path); err == nil {
+		t.Fatal("expected strict YAML error")
+	}
+}
+
+func TestLoadRulesRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.yaml")
+	body := "- name: sshd\n  source: auth\n  regex: 'from (?P<ip>\\\\S+)'\n  max_retrise: 3\n"
+	if err := writeFile(t, path, body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRulesFile(path); err == nil {
+		t.Fatal("expected strict rules YAML error")
+	}
+}
+
+func TestEnvironmentDefaultsApplyAfterMerge(t *testing.T) {
+	t.Setenv("GOBAN_DEFAULT_BANTIME", "2h")
+	cfg := DefaultConfig()
+	cfg.Rules = []RuleConfig{{Name: "sshd"}}
+	if err := ApplyEnvOverrides(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplyRuleDefaults()
+	if cfg.Rules[0].BanTime != 2*time.Hour {
+		t.Fatalf("bantime=%s, want 2h", cfg.Rules[0].BanTime)
+	}
+}
+
+func TestLoadConfigRejectsMultipleDocuments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "goban.yaml")
+	if err := writeFile(t, path, "log_level: info\n---\nlog_level: debug\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfigFromFile(path); err == nil {
+		t.Fatal("expected multiple-document YAML error")
+	}
+}
+
+func TestLoadRulesRejectsMultipleDocuments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.yaml")
+	body := "- name: one\n  source: auth\n  regex: 'from (?P<ip>\\\\S+)'\n---\n- name: two\n  source: auth\n  regex: 'from (?P<ip>\\\\S+)'\n"
+	if err := writeFile(t, path, body); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRulesFile(path); err == nil {
+		t.Fatal("expected multiple-document rules YAML error")
+	}
 }

@@ -4,17 +4,15 @@
 log_level: info
 sock_path: /run/goban/goban.sock
 socket_mode: 0o660
+socket_group: goban
 
-# IPs in these CIDR ranges are NEVER banned. Local interface addresses are
-# auto-added on top of this list, so you don't normally need to list your own
-# server.
+# IPs in these CIDR ranges are NEVER banned. GoBan auto-adds each exact local
+# interface address (/32 or /128), not the whole connected subnet. Add a
+# management CIDR only when every host in that range is genuinely trusted;
+# broad RFC1918 allowlists would otherwise exempt Docker and LAN attackers.
 allowlist:
   - 127.0.0.0/8
-  - 10.0.0.0/8
-  - 172.16.0.0/12
-  - 192.168.0.0/16
   - ::1/128
-  - fc00::/7
 
 # Bantime, findtime and max_retries each rule will inherit if it doesn't
 # specify its own.
@@ -23,8 +21,9 @@ defaults:
   findtime: 10m
   bantime: 1h
 
-# Drop pre-written rule files (one per service) into this directory and they
-# will be merged with the rules list below at startup.
+# Only enabled rule files belong here. Packages place the complete library in
+# /usr/share/goban/rules-available/ so undefined sources cannot break a stock
+# installation. Copy a bundle into this directory after defining its sources.
 rules_dir: /etc/goban/rules.d
 
 # Sources publish log lines. Each rule attaches to one named source.
@@ -32,10 +31,6 @@ sources:
   - type: file
     name: auth-log
     path: /var/log/auth.log
-
-  - type: file
-    name: nginx-access
-    path: /var/log/nginx/access.log
 
   # GoBan's own audit log — wired up so the bundled recidive rule (in
   # examples/rules.d/recidive.yaml) can escalate bans for repeat offenders.
@@ -81,11 +76,16 @@ ipset_name_v6: goban-ban-v6
 #                        iptables backend on the same chain.
 banner:
   backend: iptables
+  # INPUT protects host services; FORWARD covers bridged/routed workloads,
+  # including normal Docker bridge traffic. Remove FORWARD only when another
+  # firewall manager owns that chain and you have an equivalent custom hook.
+  iptables_chains: [INPUT, FORWARD]
   # nftables-only knobs (ignored for iptables backend)
   table: goban
   set_v4: goban-ban-v4
   set_v6: goban-ban-v6
   chain: input
+  forward_chain: forward
 
 # Persistent strike state — in-flight strike counts survive a daemon restart.
 # A determined attacker can't reset their progress by waiting for systemctl.
@@ -93,7 +93,7 @@ banner:
 state_path: /var/lib/goban/state.gob
 state_save_interval: 30s
 
-# Audit log — appends one JSON line per successful manual ban/unban via
-# goban-client. Failed attempts are NOT logged so the file remains an
-# accurate "what was applied" timeline. Empty disables auditing.
+# Audit log — appends one JSON line for every confirmed automatic or manual
+# ban and every successful unban. Failed kernel operations are never recorded,
+# so recidive and operator tooling consume an accurate applied-event stream.
 audit_log: /var/log/goban/audit.log

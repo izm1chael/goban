@@ -289,3 +289,34 @@ func TestLoadEmptyReader(t *testing.T) {
 		t.Errorf("Size() = %d, want 0", dst.Size())
 	}
 }
+
+func TestSweepUsesNewestTimestampNotAppendOrder(t *testing.T) {
+	clk := &fakeClock{now: time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)}
+	tr := New(3, 10*time.Minute)
+	tr.Now = clk.Now
+	addr := mustAddr(t, "1.2.3.4")
+	tr.HitAt(addr, clk.Now().Add(-time.Minute))
+	tr.HitAt(addr, clk.Now().Add(-30*time.Minute)) // arrives late and is not retained
+	if dropped := tr.Sweep(); dropped != 0 {
+		t.Fatalf("Sweep dropped=%d, want 0", dropped)
+	}
+	if tr.Snapshot()[addr] != 1 {
+		t.Fatalf("new strike was lost")
+	}
+}
+
+func TestLoadWithFingerprintRejectsChangedRule(t *testing.T) {
+	src := New(3, time.Minute)
+	src.Hit(mustAddr(t, "1.2.3.4"))
+	var buf bytes.Buffer
+	if err := src.SaveWithFingerprint(&buf, "old-rule"); err != nil {
+		t.Fatal(err)
+	}
+	dst := New(3, time.Minute)
+	if err := dst.LoadWithFingerprint(&buf, "new-rule"); err == nil {
+		t.Fatal("expected fingerprint mismatch")
+	}
+	if dst.Size() != 0 {
+		t.Fatalf("mismatched state was loaded")
+	}
+}

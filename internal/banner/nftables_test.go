@@ -93,7 +93,7 @@ func TestNFTables_SetupDelegatesConfig(t *testing.T) {
 		t.Fatalf("Setup called %d times, want 1", len(mock.setupCalls))
 	}
 	got := mock.setupCalls[0]
-	if got.Table != "goban" || got.SetV4 != "goban-ban-v4" || got.SetV6 != "goban-ban-v6" || got.Chain != "input" || !got.IPv6 {
+	if got.Table != "goban" || got.SetV4 != "goban-ban-v4" || got.SetV6 != "goban-ban-v6" || got.Chain != "input" || got.ForwardChain != "forward" || !got.IPv6 {
 		t.Errorf("Setup config mismatch: got %+v", got)
 	}
 }

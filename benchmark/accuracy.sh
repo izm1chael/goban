@@ -3,8 +3,8 @@
 # daemon how many it actually processed. Anything below ~99% means the daemon
 # is silently dropping lines.
 #
-# For each cell, generates `RATE * DURATION` synthetic ssh-fail lines, waits
-# for the daemon to settle, then queries:
+# For each cell, records the generator's exact emitted count, waits for the
+# daemon to settle, then queries:
 #   - GoBan: /rules endpoint → hits + misses (atomic counters, no log parsing)
 #   - fail2ban: fail2ban-client status sshd-bench → "Total failed"
 #
@@ -39,7 +39,7 @@ reset_log() {
         /tmp/acc-*.log /tmp/acc-*.stdout /tmp/acc-*.pid /tmp/acc-*.sock \
         /tmp/bench-goban.log /tmp/bench-goban.stdout \
         /tmp/bench-fail2ban.log \
-        /tmp/goban-bench.sock 2>/dev/null || true
+        /tmp/goban-bench.sock /tmp/acc-generated-count* 2>/dev/null || true
   touch "$LOG"
   chmod 666 "$LOG"
 }
@@ -161,6 +161,30 @@ query_f2b_container() {
     | awk '/Total failed:/ { print $NF; exit }'
 }
 
+
+run_generator() {
+  local rate="$1"
+  local count_file
+  count_file=$(mktemp /tmp/acc-generated-count.XXXXXX)
+  rm -f "$count_file"
+  ./gen/gen --target "$LOG" --rate "$rate" --duration "${DURATION}s" \
+    --unique-ips 200 --count-out "$count_file" >/dev/null
+  if [[ ! -s "$count_file" ]]; then
+    echo "generator did not produce an exact count file" >&2
+    return 1
+  fi
+  cat "$count_file"
+  rm -f "$count_file"
+}
+
+print_row() {
+  local scenario="$1" generated="$2" processed="$3"
+  local ratio throughput
+  ratio=$(python3 -c "print(f'{100*int($processed)/int($generated):.2f}')" 2>/dev/null || echo "ERROR")
+  throughput=$(python3 -c "print(f'{int($processed)/int($DURATION):.0f}')" 2>/dev/null || echo "?")
+  printf "%-30s | %10s | %12s | %10s | %14s\n" "$scenario" "$generated" "$processed" "$ratio" "$throughput"
+}
+
 # ---- main run ----
 echo "Accuracy check: ${DURATION}s/cell at rates ${RATES[*]} lines/sec"
 echo
@@ -168,47 +192,37 @@ printf "%-30s | %10s | %12s | %10s | %14s\n" "scenario" "generated" "processed" 
 echo "------------------------------------------------------------------------------------------------"
 
 for rate in "${RATES[@]}"; do
-  EXPECTED=$((rate * DURATION))
-
   # ---- goban native ----
   stop_all
   start_goban_native
-  ./gen/gen --target "$LOG" --rate "$rate" --duration "${DURATION}s" --unique-ips 200 >/dev/null 2>&1
-  sleep 3  # let nxadm/tail flush the last bytes through
+  generated=$(run_generator "$rate")
+  sleep 3  # let the bounded file follower flush the last bytes through
   processed=$(query_goban_native || echo 0)
-  ratio=$(python3 -c "print(f'{100*$processed/$EXPECTED:.2f}')")
-  throughput=$(python3 -c "print(f'{$processed/$DURATION:.0f}')")
-  printf "%-30s | %10d | %12s | %10s | %14s\n" "goban-native-$rate" "$EXPECTED" "$processed" "$ratio" "$throughput"
+  print_row "goban-native-$rate" "$generated" "$processed"
 
   # ---- goban container ----
   stop_all
   start_goban_container
-  ./gen/gen --target "$LOG" --rate "$rate" --duration "${DURATION}s" --unique-ips 200 >/dev/null 2>&1
+  generated=$(run_generator "$rate")
   sleep 3
   processed=$(query_goban_container || echo 0)
-  ratio=$(python3 -c "print(f'{100*$processed/$EXPECTED:.2f}')")
-  throughput=$(python3 -c "print(f'{$processed/$DURATION:.0f}')")
-  printf "%-30s | %10d | %12s | %10s | %14s\n" "goban-container-$rate" "$EXPECTED" "$processed" "$ratio" "$throughput"
+  print_row "goban-container-$rate" "$generated" "$processed"
 
   # ---- fail2ban native ----
   stop_all
   start_f2b_native
-  ./gen/gen --target "$LOG" --rate "$rate" --duration "${DURATION}s" --unique-ips 200 >/dev/null 2>&1
+  generated=$(run_generator "$rate")
   sleep 5  # fail2ban polls every 1s by default
   processed=$(query_f2b_native || echo 0)
-  ratio=$(python3 -c "print(f'{100*$processed/$EXPECTED:.2f}')" 2>/dev/null || echo "ERROR")
-  throughput=$(python3 -c "print(f'{$processed/$DURATION:.0f}')" 2>/dev/null || echo "?")
-  printf "%-30s | %10d | %12s | %10s | %14s\n" "fail2ban-native-$rate" "$EXPECTED" "$processed" "$ratio" "$throughput"
+  print_row "fail2ban-native-$rate" "$generated" "$processed"
 
   # ---- fail2ban container ----
   stop_all
   start_f2b_container
-  ./gen/gen --target "$LOG" --rate "$rate" --duration "${DURATION}s" --unique-ips 200 >/dev/null 2>&1
+  generated=$(run_generator "$rate")
   sleep 5
   processed=$(query_f2b_container || echo 0)
-  ratio=$(python3 -c "print(f'{100*$processed/$EXPECTED:.2f}')" 2>/dev/null || echo "ERROR")
-  throughput=$(python3 -c "print(f'{$processed/$DURATION:.0f}')" 2>/dev/null || echo "?")
-  printf "%-30s | %10d | %12s | %10s | %14s\n" "fail2ban-container-$rate" "$EXPECTED" "$processed" "$ratio" "$throughput"
+  print_row "fail2ban-container-$rate" "$generated" "$processed"
 done
 
 stop_all

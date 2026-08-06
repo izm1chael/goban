@@ -17,7 +17,7 @@ post_install() {
 GoBan installed successfully.
 
 Next steps:
-  1. Review /etc/goban/goban.yaml and the rule bundles in /etc/goban/rules.d/
+  1. Review /etc/goban/goban.yaml; enable extra rules from /usr/share/goban/rules-available/
   2. Enable + start the daemon:
        sudo systemctl enable --now goban
 

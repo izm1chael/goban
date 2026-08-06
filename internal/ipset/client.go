@@ -78,15 +78,26 @@ func (c *Client) Create(ctx context.Context, opts CreateOptions) error {
 	return c.doRequest(ctx, seq, c.buildCreate(seq, opts), false)
 }
 
-// Add inserts ip into the set. If the entry already exists, this is a no-op
-// — we tolerate -IPSET_ERR_EXIST from the kernel since rebanning a
-// known-bad IP is normal under our threshold semantics.
+// Add inserts ip into the set and refreshes the timeout when the entry already
+// exists. Swallowing IPSET_ERR_EXIST would leave the old remaining TTL in
+// place, so duplicate bans use an explicit delete-then-add sequence.
 func (c *Client) Add(ctx context.Context, setName string, family Family, ip netip.Addr, timeout time.Duration) error {
 	if err := validIPSetName(setName); err != nil {
 		return err
 	}
 	seq := c.nextSeq()
-	return c.doRequest(ctx, seq, c.buildAdd(seq, setName, family, Entry{IP: ip, Timeout: secs(timeout)}), true)
+	err := c.doRequest(ctx, seq, c.buildAdd(seq, setName, family, Entry{IP: ip, Timeout: secs(timeout)}), false)
+	if !errors.Is(err, syscall.Errno(ipsetErrExist)) {
+		return err
+	}
+	if err := c.Del(ctx, setName, family, ip); err != nil {
+		return fmt.Errorf("refresh existing entry: delete: %w", err)
+	}
+	seq = c.nextSeq()
+	if err := c.doRequest(ctx, seq, c.buildAdd(seq, setName, family, Entry{IP: ip, Timeout: secs(timeout)}), false); err != nil {
+		return fmt.Errorf("refresh existing entry: re-add: %w", err)
+	}
+	return nil
 }
 
 // AddBatch inserts many entries in one netlink message. All entries must

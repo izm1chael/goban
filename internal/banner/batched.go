@@ -2,6 +2,7 @@ package banner
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"time"
@@ -9,36 +10,34 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// BatchedBanner wraps a Banner and coalesces ban requests inside a short
-// flush window. Multiple Ban() calls arriving within the window are sent to
-// the underlying Banner as a single BanBatch — for the netlink ipset client
-// this collapses N kernel round-trips into one.
-//
-// Unban/List/Setup/Close pass through unchanged.
+var ErrClosed = errors.New("banner closed")
+
+type queuedBan struct {
+	req    BanRequest
+	result chan error
+}
+
+// BatchedBanner coalesces nearby requests while preserving the Banner
+// contract: Ban returns success only after the underlying kernel operation has
+// acknowledged the request. This prevents trackers and audit logs from
+// recording a ban that was merely queued and later failed.
 type BatchedBanner struct {
 	inner       Banner
 	flushPeriod time.Duration
 	flushSize   int
 	log         zerolog.Logger
 
-	mu       sync.Mutex
-	pending  []BanRequest
-	timer    *time.Timer
-	closed   bool
-	closedCh chan struct{}
+	mu      sync.Mutex
+	pending []queuedBan
+	timer   *time.Timer
+	closed  bool
 }
 
-// BatchOpts configures the batching behavior. Zero-value fields use safe
-// defaults.
 type BatchOpts struct {
-	FlushPeriod time.Duration // default 10ms
-	FlushSize   int           // default 32 (flush early when this many pending)
+	FlushPeriod time.Duration
+	FlushSize   int
 }
 
-// NewBatched wraps inner with batching. Calls to BatchedBanner.Ban return
-// nil immediately after enqueuing; errors from the underlying Banner are
-// surfaced through the logger instead of the caller. Synchronous error
-// surfaces are available via BanBatch (which calls inner.BanBatch directly).
 func NewBatched(inner Banner, log zerolog.Logger, opts BatchOpts) *BatchedBanner {
 	if opts.FlushPeriod <= 0 {
 		opts.FlushPeriod = 10 * time.Millisecond
@@ -51,93 +50,120 @@ func NewBatched(inner Banner, log zerolog.Logger, opts BatchOpts) *BatchedBanner
 		flushPeriod: opts.FlushPeriod,
 		flushSize:   opts.FlushSize,
 		log:         log.With().Str("component", "banner.batched").Logger(),
-		closedCh:    make(chan struct{}),
 	}
 }
 
-// Setup forwards to inner.
 func (b *BatchedBanner) Setup(ctx context.Context) error { return b.inner.Setup(ctx) }
 
-// Ban enqueues the request. The actual kernel call happens in a background
-// flush (at most flushPeriod later) or immediately when the queue reaches
-// flushSize.
-func (b *BatchedBanner) Ban(_ context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
+func (b *BatchedBanner) Ban(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
+	q := queuedBan{
+		req:    BanRequest{IP: ip, Rule: rule, TTL: ttl},
+		result: make(chan error, 1),
+	}
+
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.closed {
-		return nil
+		b.mu.Unlock()
+		return ErrClosed
 	}
-	b.pending = append(b.pending, BanRequest{IP: ip, Rule: rule, TTL: ttl})
+	b.pending = append(b.pending, q)
+	var batch []queuedBan
 	if len(b.pending) >= b.flushSize {
-		// Flush synchronously (still under lock — but the flush copies and
-		// releases). Caller doesn't block on this path beyond the kernel
-		// roundtrip for the batch they triggered.
-		b.flushLocked()
-		return nil
-	}
-	if b.timer == nil {
+		batch = b.drainLocked()
+	} else if b.timer == nil {
 		b.timer = time.AfterFunc(b.flushPeriod, b.flushAsync)
 	}
-	return nil
+	b.mu.Unlock()
+
+	if len(batch) > 0 {
+		b.flush(batch)
+	}
+
+	select {
+	case err := <-q.result:
+		return err
+	case <-ctx.Done():
+		// The request may still be applied after caller cancellation. This is
+		// unavoidable once a batch is in-flight; the returned context error makes
+		// the ambiguity explicit instead of claiming success.
+		return ctx.Err()
+	}
 }
 
-// BanBatch forwards directly to inner.BanBatch — the caller already produced
-// a batch, so we don't need to enqueue.
 func (b *BatchedBanner) BanBatch(ctx context.Context, reqs []BanRequest) error {
 	return b.inner.BanBatch(ctx, reqs)
 }
 
-// Unban passes through. Unbans are infrequent so there's no batching win.
 func (b *BatchedBanner) Unban(ctx context.Context, ip netip.Addr) error {
 	return b.inner.Unban(ctx, ip)
 }
 
-// List flushes pending bans first so the returned set reflects everything
-// queued at call time, then forwards to inner.
 func (b *BatchedBanner) List(ctx context.Context) ([]BanInfo, error) {
 	b.mu.Lock()
-	b.flushLocked()
+	batch := b.drainLocked()
 	b.mu.Unlock()
+	if len(batch) > 0 {
+		if err := b.flush(batch); err != nil {
+			return nil, err
+		}
+	}
 	return b.inner.List(ctx)
 }
 
-// Close flushes any pending bans and shuts the inner banner.
 func (b *BatchedBanner) Close(ctx context.Context, flush bool) error {
 	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return b.inner.Close(ctx, flush)
+	}
 	b.closed = true
+	batch := b.drainLocked()
+	b.mu.Unlock()
+
+	if len(batch) > 0 {
+		if err := b.flush(batch); err != nil {
+			return err
+		}
+	}
+	return b.inner.Close(ctx, flush)
+}
+
+func (b *BatchedBanner) flushAsync() {
+	b.mu.Lock()
+	batch := b.drainLocked()
+	b.mu.Unlock()
+	if len(batch) > 0 {
+		b.flush(batch)
+	}
+}
+
+func (b *BatchedBanner) drainLocked() []queuedBan {
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
 	}
-	b.flushLocked()
-	b.mu.Unlock()
-	close(b.closedCh)
-	return b.inner.Close(ctx, flush)
-}
-
-// flushAsync is called from the timer goroutine.
-func (b *BatchedBanner) flushAsync() {
-	b.mu.Lock()
-	b.timer = nil
-	b.flushLocked()
-	b.mu.Unlock()
-}
-
-// flushLocked drains pending into inner.BanBatch. Caller must hold b.mu.
-// We release the lock while the kernel call is in flight so concurrent Ban
-// requests can keep enqueuing.
-func (b *BatchedBanner) flushLocked() {
 	if len(b.pending) == 0 {
-		return
+		return nil
 	}
 	batch := b.pending
 	b.pending = nil
-	b.mu.Unlock()
+	return batch
+}
+
+func (b *BatchedBanner) flush(batch []queuedBan) error {
+	reqs := make([]BanRequest, len(batch))
+	for i := range batch {
+		reqs[i] = batch[i].req
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	err := b.inner.BanBatch(ctx, batch)
+	err := b.inner.BanBatch(ctx, reqs)
 	cancel()
-	b.mu.Lock()
 	if err != nil {
 		b.log.Error().Err(err).Int("size", len(batch)).Msg("batched ban flush failed")
 	}
+	for i := range batch {
+		batch[i].result <- err
+		close(batch[i].result)
+	}
+	return err
 }

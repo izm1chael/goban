@@ -80,3 +80,59 @@ func TestFileSource_TruncatesLongLines(t *testing.T) {
 		t.Fatal("timed out")
 	}
 }
+
+func TestFileSource_FollowsRotationFromStart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{Name: "test", Path: path})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ch := s.Subscribe("rule", 8)
+	time.Sleep(250 * time.Millisecond)
+
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("after rotation\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case line := <-ch:
+		if line.Text != "after rotation" || line.ReceivedAt.IsZero() {
+			t.Fatalf("line=%+v", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for rotated file")
+	}
+}
+
+func TestFileSource_MissingAtStartReadsNewFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "later.log")
+	s := New(Config{Name: "test", Path: path})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ch := s.Subscribe("rule", 8)
+	if err := os.WriteFile(path, []byte("created later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case line := <-ch:
+		if line.Text != "created later" {
+			t.Fatalf("line=%+v", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for newly-created file")
+	}
+}

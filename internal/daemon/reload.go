@@ -1,32 +1,43 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/izm1chael/goban/internal/allowlist"
+	"github.com/rs/zerolog"
+
 	"github.com/izm1chael/goban/internal/config"
+	"github.com/izm1chael/goban/internal/source"
 )
 
-// Reload reloads the daemon's config from disk and applies the diff atomically.
-// Triggered by SIGHUP or POST /reload. On any validation or runtime failure,
-// the running daemon is unchanged and the error is returned.
+// Reload builds a complete candidate graph before pausing the active rule
+// consumers. Candidate sources start while the old sources remain attached.
+// At cutover, both bounded queues are reconciled as multisets: every event
+// buffered by the old graph is processed once, and equivalent events already
+// present in the candidate queues are discarded only when they were received
+// before the old producers stopped. This closes both sides of the hand-off:
+// events cannot fall into a seek/start gap, and overlap cannot double-count.
 //
-// Reloadable: rules (add/remove/change), sources (add/remove), global +
-// per-rule allowlists, defaults (apply to NEW rules only).
-//
-// Restart-only (refused with a clear error): sock_path, state_path,
-// audit_log, ipset_name_v4/v6, ipv6, dry_run, batch_bans, socket_mode/group.
-// Listed by assertImmutableFieldsUnchanged below.
-func (d *Daemon) Reload(_ context.Context) error {
-	// 1. Load + validate new config from disk
+// If any candidate source fails to start, already-started candidates are
+// closed and the old rule consumers are relaunched against their still-live
+// sources. The active config and graph remain unchanged.
+func (d *Daemon) Reload(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d.reloadMu.Lock()
+	defer d.reloadMu.Unlock()
+
 	newCfg, err := loadFreshConfig(d.cfgPath, d.rulesDir)
 	if err != nil {
 		return fmt.Errorf("reload load: %w", err)
@@ -37,258 +48,276 @@ func (d *Daemon) Reload(_ context.Context) error {
 	if err := assertImmutableFieldsUnchanged(d.cfg, newCfg); err != nil {
 		return fmt.Errorf("reload refused: %w", err)
 	}
-
-	// 2. Compute diff under the lock.
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	plan := d.computeReloadPlan(newCfg)
-
-	// 3a. Stop removed/changed rules. Each rule's strike state is persisted
-	// before the rule disappears so a future re-add (or daemon restart)
-	// could resurrect it. The strike state is then released — the rule is
-	// completely gone from in-memory state.
-	for _, name := range plan.stopRules {
-		ri := d.rules[name]
-		d.saveRuleState(name, ri) // persist tracker for posterity
-		// Cancel the rule's context so its goroutine exits.
-		ri.cancel()
-		// Unsubscribe from its source, closing the channel; the rule's
-		// `range in` loop also terminates this way.
-		if si, ok := d.sources[ri.sourceName]; ok {
-			si.src.Unsubscribe(name)
-			si.refcount--
-		}
-		// Wait for the goroutine to actually exit before continuing —
-		// otherwise we could leak it past a reload cycle.
-		select {
-		case <-ri.done:
-		case <-time.After(5 * time.Second):
-			d.log.Warn().Str("rule", name).Msg("rule goroutine did not exit within 5s — proceeding anyway (likely goroutine leak)")
-		}
-		delete(d.rules, name)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	// 3b. Close sources whose refcount dropped to zero.
-	for name, si := range d.sources {
-		if si.refcount == 0 && !plan.keepSource[name] {
-			if err := si.src.Close(); err != nil {
-				d.log.Warn().Err(err).Str("source", name).Msg("source close during reload")
-			}
-			delete(d.sources, name)
-		}
+	candidateAllowlist, err := buildAllowlist(newCfg.Allowlist)
+	if err != nil {
+		return fmt.Errorf("reload allowlist: %w", err)
 	}
-
-	// 3c. Rebuild global allowlist if changed.
-	if plan.allowlistChanged {
-		al, err := allowlist.New(newCfg.Allowlist)
+	candidateSources := make(map[string]*sourceInstance, len(newCfg.Sources))
+	for _, sc := range newCfg.Sources {
+		// replay_on_start is intentionally startup-only. Replaying an entire
+		// historical file on every SIGHUP would double-count old attacks and
+		// can trigger false bans during an otherwise unrelated rule reload.
+		src, err := buildSource(sc, false)
 		if err != nil {
-			return fmt.Errorf("reload allowlist: %w", err)
-		}
-		_ = al.AddLocalInterfaces()
-		d.allowlist = al
-	}
-
-	// 3d. Open new sources (those referenced by new/added rules but not
-	// already running).
-	for _, sc := range plan.addSources {
-		s, err := buildSource(sc, newCfg.ReplayOnStart)
-		if err != nil {
+			closeSourceGraph(candidateSources)
 			return fmt.Errorf("reload build source %q: %w", sc.Name, err)
 		}
-		if err := s.Start(d.rootCtx); err != nil {
-			return fmt.Errorf("reload start source %q: %w", sc.Name, err)
+		candidateSources[sc.Name] = &sourceInstance{src: src}
+	}
+	candidateRules := make(map[string]*ruleInstance, len(newCfg.Rules))
+	for _, rc := range newCfg.Rules {
+		ri, err := d.buildRuleInstanceWithAllowlist(rc, candidateAllowlist)
+		if err != nil {
+			closeSourceGraph(candidateSources)
+			return fmt.Errorf("reload build rule %q: %w", rc.Name, err)
 		}
-		d.sources[sc.Name] = &sourceInstance{src: s}
+		candidateRules[rc.Name] = ri
 	}
 
-	// 3e. Start new/changed rules. If any fails, log and continue — we've
-	// already torn down the old version, so partial application is the
-	// least-bad outcome.
 	bufSize := newCfg.StrikeChanSize
 	if bufSize <= 0 {
 		bufSize = 256
 	}
-	for _, rc := range plan.addRules {
-		ri, err := d.buildRuleInstance(rc)
-		if err != nil {
-			d.log.Error().Err(err).Str("rule", rc.Name).Msg("reload: failed to build new rule")
-			continue
+	prepared := make([]string, 0, len(candidateRules))
+	for name, ri := range candidateRules {
+		if err := prepareRuleInstance(name, ri, candidateSources, bufSize); err != nil {
+			d.cleanupPrepared(prepared, candidateRules, candidateSources)
+			closeSourceGraph(candidateSources)
+			return fmt.Errorf("reload prepare rule %q: %w", name, err)
 		}
-		d.rules[rc.Name] = ri
-		if err := d.startRuleInstance(rc.Name, ri, bufSize); err != nil {
-			d.log.Error().Err(err).Str("rule", rc.Name).Msg("reload: failed to start new rule")
-			delete(d.rules, rc.Name)
-			continue
-		}
-		// Try to restore prior strike state if a save file exists from a
-		// previous run of this rule (e.g. the rule was just stopped and
-		// re-added with a new signature — the operator probably wants the
-		// strike state preserved, not just reset).
-		if d.cfg.StatePath != "" {
-			path := d.statePathFor(rc.Name)
-			if f, err := os.Open(path); err == nil {
-				_ = ri.rule.Tracker().Load(f)
-				_ = f.Close()
+		prepared = append(prepared, name)
+	}
+
+	// Durable state is loaded before any candidate source can publish. An
+	// unchanged active rule's newer in-memory state replaces it at cutover.
+	for name, ri := range candidateRules {
+		d.loadRuleState(name, ri)
+	}
+
+	d.mu.Lock()
+	oldRules := d.rules
+	oldSources := d.sources
+	for _, ri := range oldRules {
+		ri.beginCutoverRecording()
+	}
+
+	// Candidate producers start while the entire old graph remains live and
+	// consuming. Each active old rule records a multiset of lines processed
+	// during this overlap. If candidate startup fails, recording is disabled
+	// and the old graph has never been paused, cancelled, or replaced.
+	started := make([]string, 0, len(candidateSources))
+	for name, si := range candidateSources {
+		if err := si.src.Start(d.rootCtx); err != nil {
+			for _, oldRI := range oldRules {
+				oldRI.endCutoverRecording()
 			}
+			for _, startedName := range started {
+				_ = candidateSources[startedName].src.Close()
+			}
+			d.cleanupPrepared(prepared, candidateRules, candidateSources)
+			closeSourceGraph(candidateSources)
+			d.mu.Unlock()
+			return fmt.Errorf("reload start source %q: %w", name, err)
 		}
+		started = append(started, name)
+	}
+
+	// Candidate startup succeeded. Pause the old consumers only now, after
+	// every candidate source is receiving. A slow candidate startup therefore
+	// cannot overflow an artificially paused old queue.
+	for _, ri := range oldRules {
+		if ri.cancel != nil {
+			ri.cancel()
+		}
+	}
+	waitForRules(d.log, oldRules)
+
+	for name, oldRI := range oldRules {
+		newRI, ok := candidateRules[name]
+		if !ok || oldRI.sig != newRI.sig {
+			continue
+		}
+		if err := cloneTrackerState(oldRI, newRI); err != nil {
+			d.log.Warn().Err(err).Str("rule", name).Msg("could not transfer live tracker state; durable snapshot retained")
+		}
+	}
+
+	// Stop old producers, then drain their now-closed subscriber queues. The
+	// dedupe multiset includes both lines processed by the live old consumers
+	// during candidate startup and lines transferred from the old queues.
+	for _, si := range oldSources {
+		_ = si.src.Close()
+	}
+	oldClosedAt := time.Now()
+	oldCounts := make(map[string]map[string]int, len(oldRules))
+	for name, oldRI := range oldRules {
+		counts := oldRI.endCutoverRecording()
+		newRI, ok := candidateRules[name]
+		if !ok || oldRI.sourceName != newRI.sourceName || oldRI.input == nil {
+			continue
+		}
+		for line := range oldRI.input {
+			newRI.rule.Process(d.rootCtx, line)
+			counts[reloadLineKey(line)]++
+		}
+		oldCounts[name] = counts
+	}
+
+	// Drain the candidate queues that accumulated during the overlap. A
+	// candidate receipt timestamped after oldClosedAt cannot have come from
+	// both generations and is always processed. Before that boundary, skip at
+	// most the matching number of events already consumed from the old queue.
+	for name, newRI := range candidateRules {
+		counts := oldCounts[name]
+		drainCandidateQueue(newRI, oldClosedAt, counts, d.rootCtx)
 	}
 
 	d.cfg = newCfg
+	d.allowlist = candidateAllowlist
+	d.sources = candidateSources
+	d.rules = candidateRules
+	for _, name := range prepared {
+		d.launchRuleInstance(candidateRules[name])
+	}
+	d.mu.Unlock()
+
 	d.log.Info().
-		Int("added", len(plan.addRules)).
-		Int("stopped", len(plan.stopRules)).
-		Int("sources_added", len(plan.addSources)).
-		Msg("config reloaded")
+		Int("rules", len(candidateRules)).
+		Int("sources", len(candidateSources)).
+		Msg("config reloaded with transactional source cutover")
 	return nil
 }
 
-// reloadPlan is the diff between the running state and the new config.
-type reloadPlan struct {
-	stopRules        []string            // rule names to tear down (removed OR changed)
-	addRules         []config.RuleConfig // rules to construct (added OR changed)
-	addSources       []config.SourceConfig
-	keepSource       map[string]bool // source names still referenced
-	allowlistChanged bool
+func reloadLineKey(line source.LogLine) string {
+	// Length-prefix variable fields so arbitrary log content cannot create an
+	// ambiguous concatenation. Event timestamps are intentionally excluded:
+	// file and Docker generations can observe the same record at slightly
+	// different times during overlap.
+	return fmt.Sprintf("%d:%s%d:%s%d:%s%s", len(line.Source), line.Source, len(line.Container), line.Container, len(line.Unit), line.Unit, line.Text)
 }
 
-// computeReloadPlan walks the new config and decides which rules/sources
-// need adding, removing, or restarting. Called under d.mu.
-func (d *Daemon) computeReloadPlan(newCfg *config.Config) reloadPlan {
-	plan := reloadPlan{keepSource: make(map[string]bool)}
-
-	// Build a map of new rules keyed by name for O(1) lookup.
-	newRuleByName := make(map[string]config.RuleConfig)
-	for _, rc := range newCfg.Rules {
-		newRuleByName[rc.Name] = rc
-		plan.keepSource[rc.Source] = true
-	}
-
-	// Existing rules: STOP if removed, STOP+ADD if changed.
-	for name, ri := range d.rules {
-		newRc, stillExists := newRuleByName[name]
-		if !stillExists {
-			plan.stopRules = append(plan.stopRules, name)
-			continue
-		}
-		if ruleSig(newRc) != ri.sig {
-			// Signature changed: treat as remove + add.
-			plan.stopRules = append(plan.stopRules, name)
-			plan.addRules = append(plan.addRules, newRc)
-		}
-	}
-
-	// New rules: ADD.
-	for _, rc := range newCfg.Rules {
-		if _, exists := d.rules[rc.Name]; !exists {
-			plan.addRules = append(plan.addRules, rc)
-		}
-	}
-
-	// Sources to add: referenced by some rule, not currently in d.sources.
-	seenSource := make(map[string]bool)
-	for _, sc := range newCfg.Sources {
-		if !plan.keepSource[sc.Name] {
-			continue // unreferenced; ignore
-		}
-		if _, exists := d.sources[sc.Name]; exists {
-			continue
-		}
-		if seenSource[sc.Name] {
-			continue
-		}
-		seenSource[sc.Name] = true
-		plan.addSources = append(plan.addSources, sc)
-	}
-
-	plan.allowlistChanged = !sameAllowlist(d.cfg.Allowlist, newCfg.Allowlist)
-
-	// Sort for deterministic ordering (helps tests assert on the plan).
-	sort.Strings(plan.stopRules)
-	sort.Slice(plan.addRules, func(i, j int) bool { return plan.addRules[i].Name < plan.addRules[j].Name })
-	sort.Slice(plan.addSources, func(i, j int) bool { return plan.addSources[i].Name < plan.addSources[j].Name })
-	return plan
+func (ri *ruleInstance) beginCutoverRecording() {
+	ri.cutoverMu.Lock()
+	ri.cutoverCounts = make(map[string]int)
+	ri.cutoverRecord = true
+	ri.cutoverMu.Unlock()
 }
 
-// assertImmutableFieldsUnchanged returns a non-nil error if any field that
-// requires a full restart was changed between old and new config.
+func (ri *ruleInstance) recordCutoverLine(line source.LogLine) {
+	ri.cutoverMu.Lock()
+	if ri.cutoverRecord {
+		ri.cutoverCounts[reloadLineKey(line)]++
+	}
+	ri.cutoverMu.Unlock()
+}
+
+func (ri *ruleInstance) endCutoverRecording() map[string]int {
+	ri.cutoverMu.Lock()
+	counts := ri.cutoverCounts
+	ri.cutoverRecord = false
+	ri.cutoverCounts = nil
+	ri.cutoverMu.Unlock()
+	if counts == nil {
+		counts = make(map[string]int)
+	}
+	return counts
+}
+
+func drainCandidateQueue(ri *ruleInstance, oldClosedAt time.Time, oldCounts map[string]int, ctx context.Context) {
+	if ri == nil || ri.input == nil {
+		return
+	}
+	for {
+		select {
+		case line, ok := <-ri.input:
+			if !ok {
+				return
+			}
+			received := line.ReceivedAt
+			if received.IsZero() {
+				received = line.Time
+			}
+			key := reloadLineKey(line)
+			if !received.After(oldClosedAt) && oldCounts[key] > 0 {
+				oldCounts[key]--
+				continue
+			}
+			ri.rule.Process(ctx, line)
+		default:
+			return
+		}
+	}
+}
+
+func waitForRules(log zerolog.Logger, rules map[string]*ruleInstance) {
+	for name, ri := range rules {
+		if ri.done == nil {
+			continue
+		}
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ri.done:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
+			// Do not return a failed reload while a cancelled consumer can
+			// still stop later and leave the supposedly unchanged graph
+			// unprotected. Continue waiting after surfacing the stall.
+			log.Warn().Str("rule", name).Msg("rule stop exceeded 5s during reload cutover; waiting for safe hand-off")
+			<-ri.done
+		}
+	}
+}
+
+func closeSourceGraph(sources map[string]*sourceInstance) {
+	for _, si := range sources {
+		_ = si.src.Close()
+	}
+}
+
+func cloneTrackerState(oldRI, newRI *ruleInstance) error {
+	var buf bytes.Buffer
+	if err := oldRI.rule.Tracker().SaveWithFingerprint(&buf, oldRI.sig); err != nil {
+		return err
+	}
+	return newRI.rule.Tracker().LoadWithFingerprint(&buf, newRI.sig)
+}
+
+// assertImmutableFieldsUnchanged allows only rules, sources, defaults and the
+// global allowlist to change live. Every other field affects a long-lived
+// component, ticker, socket, persistence path, or firewall graph and therefore
+// requires a process restart rather than a misleading partial reload.
 func assertImmutableFieldsUnchanged(oldCfg, newCfg *config.Config) error {
-	check := func(name string, ok bool) error {
-		if !ok {
-			return fmt.Errorf("%s is restart-only and cannot be hot-reloaded", name)
-		}
-		return nil
-	}
-	if err := check("sock_path", oldCfg.SocketPath == newCfg.SocketPath); err != nil {
-		return err
-	}
-	if err := check("socket_mode", oldCfg.SocketMode == newCfg.SocketMode); err != nil {
-		return err
-	}
-	if err := check("socket_group", oldCfg.SocketGroup == newCfg.SocketGroup); err != nil {
-		return err
-	}
-	if err := check("ipset_name_v4", oldCfg.IPSetNameV4 == newCfg.IPSetNameV4); err != nil {
-		return err
-	}
-	if err := check("ipset_name_v6", oldCfg.IPSetNameV6 == newCfg.IPSetNameV6); err != nil {
-		return err
-	}
-	if err := check("ipv6", oldCfg.IPv6 == newCfg.IPv6); err != nil {
-		return err
-	}
-	if err := check("dry_run", oldCfg.DryRun == newCfg.DryRun); err != nil {
-		return err
-	}
-	if err := check("batch_bans", oldCfg.BatchBans == newCfg.BatchBans); err != nil {
-		return err
-	}
-	if err := check("state_path", oldCfg.StatePath == newCfg.StatePath); err != nil {
-		return err
-	}
-	if err := check("audit_log", oldCfg.AuditLog == newCfg.AuditLog); err != nil {
-		return err
+	oldStatic := *oldCfg
+	newStatic := *newCfg
+	oldStatic.Rules, newStatic.Rules = nil, nil
+	oldStatic.Sources, newStatic.Sources = nil, nil
+	oldStatic.Allowlist, newStatic.Allowlist = nil, nil
+	oldStatic.Defaults, newStatic.Defaults = config.RuleDefaults{}, config.RuleDefaults{}
+	if !reflect.DeepEqual(oldStatic, newStatic) {
+		return fmt.Errorf("a restart-only setting changed (only rules, sources, defaults, and allowlist support hot reload)")
 	}
 	return nil
 }
 
-// ruleSig hashes the semantically-significant fields of a RuleConfig so
-// Reload can tell whether an existing rule is unchanged (keep) or modified
-// (stop + start fresh).
+// ruleSig fingerprints every processing-semantic field. State from a rule is
+// restored only when this fingerprint still matches.
 func ruleSig(rc config.RuleConfig) string {
-	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|%d|%s|%s|", rc.Name, rc.Source, rc.Regex, rc.MaxRetries, rc.FindTime, rc.BanTime)
-	// Per-rule allowlist contributes; sort for stability.
-	cidrs := append([]string(nil), rc.Allowlist...)
-	sort.Strings(cidrs)
-	for _, c := range cidrs {
-		h.Write([]byte(c))
-		h.Write([]byte("|"))
-	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	normalized := rc
+	normalized.Allowlist = append([]string(nil), rc.Allowlist...)
+	sort.Strings(normalized.Allowlist)
+	normalized.TrustedProxies = append([]string(nil), rc.TrustedProxies...)
+	sort.Strings(normalized.TrustedProxies)
+	data, _ := json.Marshal(normalized) // RuleConfig contains JSON-safe values.
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
-// sameAllowlist compares two CIDR slices order-insensitively.
-func sameAllowlist(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	aa := append([]string(nil), a...)
-	bb := append([]string(nil), b...)
-	sort.Strings(aa)
-	sort.Strings(bb)
-	for i := range aa {
-		if aa[i] != bb[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// loadFreshConfig reads cfgPath, applies the same env overrides and
-// rules-dir merging that goban-daemon's main does, validates the result,
-// and returns it. Mirrors cmd/goban-daemon/main.go:loadConfig but lives in
-// the daemon package so Reload can call it without pulling cmd code.
 func loadFreshConfig(cfgPath, rulesDir string) (*config.Config, error) {
 	cfg, err := config.LoadConfigFromFile(cfgPath)
 	if err != nil {
@@ -318,11 +347,11 @@ func loadFreshRulesDir(dir string) ([]config.RuleConfig, error) {
 		return nil, err
 	}
 	var out []config.RuleConfig
-	for _, e := range entries {
-		if e.IsDir() {
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		name := e.Name()
+		name := entry.Name()
 		ext := strings.ToLower(filepath.Ext(name))
 		if ext != ".yaml" && ext != ".yml" {
 			continue

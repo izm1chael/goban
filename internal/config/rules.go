@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -29,15 +30,45 @@ func LoadRulesFile(path string) ([]RuleConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	var bare []RuleConfig
-	if err := yaml.Unmarshal(data, &bare); err == nil && len(bare) > 0 && bare[0].Name != "" {
-		return bare, nil
-	}
-	var wrapper struct {
-		Rules []RuleConfig `yaml:"rules"`
-	}
-	if err := yaml.Unmarshal(data, &wrapper); err != nil {
+
+	var node yaml.Node
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&node); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return wrapper.Rules, nil
+	if err := requireYAMLEOF(dec); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if len(node.Content) == 0 {
+		return nil, nil
+	}
+	root := node.Content[0]
+	switch root.Kind {
+	case yaml.SequenceNode:
+		var rules []RuleConfig
+		if err := root.Decode(&rules); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		// Decode again through a strict wrapper so unknown fields inside list
+		// elements are rejected by KnownFields.
+		strict := yaml.NewDecoder(bytes.NewReader(data))
+		strict.KnownFields(true)
+		if err := strict.Decode(&rules); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		return rules, nil
+	case yaml.MappingNode:
+		var wrapper struct {
+			Rules []RuleConfig `yaml:"rules"`
+		}
+		strict := yaml.NewDecoder(bytes.NewReader(data))
+		strict.KnownFields(true)
+		if err := strict.Decode(&wrapper); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
+		}
+		return wrapper.Rules, nil
+	default:
+		return nil, fmt.Errorf("parse %s: expected a rule list or rules: mapping", path)
+	}
 }

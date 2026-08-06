@@ -12,12 +12,12 @@ import (
 // NLM_F_EXCL — repeated invocations are no-ops on objects that already
 // exist).
 type SetupConfig struct {
-	Table     string
-	SetV4     string
-	SetV6     string
-	Chain     string
-	IPv6      bool
-	HookInput bool // true (default); reserved for future variants
+	Table        string
+	SetV4        string
+	SetV6        string
+	Chain        string // input hook
+	ForwardChain string // forward hook; empty disables forwarded traffic protection
+	IPv6         bool
 }
 
 // EntryFamily selects the IP family of a set element.
@@ -45,16 +45,14 @@ func (c *Client) buildNewTable(seq uint32, name string) []byte {
 	})
 }
 
-// buildNewChain builds an NFT_MSG_NEWCHAIN request for a base chain hooked
-// into NF_INET_LOCAL_IN. We always use type "filter" and policy ACCEPT;
-// individual rules inside the chain do the dropping.
-func (c *Client) buildNewChain(seq uint32, table, chain string) []byte {
+// buildNewChain builds a base filter chain at the requested netfilter hook.
+func (c *Client) buildNewChain(seq uint32, table, chain string, hook uint8) []byte {
 	flags := nlmFRequest | nlmFAck | nlmFCreate
 	return buildMessage(subsysNFTables, cmdNewChain, familyInet, flags, seq, func(buf []byte) []byte {
 		buf = encodeAttrString(buf, attrChainTable, table)
 		buf = encodeAttrString(buf, attrChainName, chain)
 		buf = nested(buf, attrChainHook, func(buf []byte) []byte {
-			buf = encodeAttrU32BE(buf, attrHookNum, uint32(hookInput))
+			buf = encodeAttrU32BE(buf, attrHookNum, uint32(hook))
 			buf = encodeAttrS32BE(buf, attrHookPriority, priorityFilterMinus300)
 			return buf
 		})

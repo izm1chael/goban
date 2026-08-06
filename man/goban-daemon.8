@@ -1,35 +1,30 @@
-.\" goban-daemon man page — install to /usr/share/man/man8/goban-daemon.8.gz
-.TH GOBAN-DAEMON 8 "May 2026" "goban 1.0" "System Administration"
+." goban-daemon man page — install to /usr/share/man/man8/goban-daemon.8.gz
+.TH GOBAN-DAEMON 8 "August 2026" "goban" "System Administration"
 .SH NAME
-goban-daemon \- log-tailing IP banner for fail2ban-style protection
+goban-daemon \- supervised log watcher and confirmed kernel IP banner
 .SH SYNOPSIS
 .B goban-daemon
 [\fIOPTIONS\fR]
 .SH DESCRIPTION
 .B goban-daemon
-watches one or more log sources (files, Docker containers, the systemd
-journal) for patterns that indicate authentication abuse, and bans the
-matching source IPs at the kernel level via iptables+ipset (default) or
-nftables.
+watches file, Docker, or systemd-journal sources for authentication and
+application abuse. Rules extract an IP address with a named regular-expression
+capture, count strikes in a sliding time window, and apply a timeout-bearing
+kernel ban through iptables+ipset or native nftables.
 .PP
-Rules are declared in YAML — each rule pairs a regular expression with a
-threshold and a ban duration. When an IP matches the rule's regex more
-than \fImax_retries\fR times within \fIfindtime\fR, the daemon adds it to
-the kernel's ban set with a per-element TTL of \fIbantime\fR.
-.PP
-Operators interact with a running daemon through
-.BR goban-client (1),
-which talks to a unix socket on
-.IR /run/goban/goban.sock .
+A ban is counted, audited, and removed from strike state only after the
+firewall backend confirms it. Source lifecycle, reconnects, queue drops, and
+firewall-list errors are exposed through
+.BR goban-client (1).
 .SH OPTIONS
 .TP
 .BR \-config " " \fIPATH\fR
-Path to the YAML configuration file (default
+Path to the strict YAML configuration file (default
 .IR /etc/goban/goban.yaml ).
 .TP
 .BR \-rules-dir " " \fIDIR\fR
-Override the configured rules_dir. Files matching *.yaml in this directory
-are merged with the rules list in the main config at startup.
+Override the configured enabled-rule directory. Every *.yaml and *.yml file
+is decoded strictly and merged at startup/reload.
 .TP
 .BR \-version
 Print version and exit.
@@ -39,86 +34,106 @@ Print usage and exit.
 .SH FILES
 .TP
 .I /etc/goban/goban.yaml
-Main configuration file. See the example shipped in
-.IR /usr/share/doc/goban/goban.yaml.example .
+Main configuration.
 .TP
 .I /etc/goban/rules.d/
-Drop-in directory for rule files. Each *.yaml is merged at startup
-and reloadable via SIGHUP / goban-client reload.
+Enabled rule bundles. Packages install only stock-safe bundles here.
 .TP
-.I /var/lib/goban/state.gob
-Persistent strike state (gob-encoded). Survives daemon restart and host
-reboot. Delete to reset all in-flight strike counters.
+.I /usr/share/goban/rules-available/
+Complete bundled rule library. Copy a file into rules.d only after defining
+all sources it references.
+.TP
+.I /var/lib/goban/state-<rule>.gob
+Per-rule fingerprinted strike state. Incompatible rule semantics cause old
+state to be discarded rather than loaded into a changed rule.
+.TP
+.I /var/lib/goban/state-bans.json
+Ban attribution metadata used to retain rule/source context across daemon
+restarts. Kernel state remains authoritative for whether a ban is active.
 .TP
 .I /var/log/goban/audit.log
-JSON-lines audit log; one line per applied ban/unban. The bundled
-\fIrecidive\fR rule tails this file for repeat-offender escalation.
+JSON-lines timeline of confirmed automatic/manual bans and successful unbans.
+The bundled recidive rule consumes confirmed ban events.
 .TP
 .I /run/goban/goban.sock
-Unix socket the daemon listens on for goban-client commands. Defaults
-to mode 0660, owned by root:goban.
+Unix control socket. Mode and group are configured with socket_mode and
+socket_group; an unknown group fails socket startup.
 .SH SIGNALS
 .TP
 .B SIGTERM " | " SIGINT
-Graceful shutdown. State is saved, kernel ban sets are preserved unless
-flush_on_exit is set.
+Graceful shutdown. Strike and attribution state are saved. Kernel sets are
+preserved unless flush_on_exit is enabled.
 .TP
 .B SIGHUP
-Hot-reload configuration. The daemon diffs the new config against the
-running one, adds/removes/modifies rules without dropping unaffected
-in-flight bans, and rejects an invalid config (the previous config keeps
-running). Equivalent to
+Transactional hot reload. GoBan strictly validates and builds a complete
+candidate graph, starts candidate sources, reconciles bounded old/new queues,
+and swaps only after successful startup. On candidate failure, the active
+graph is resumed unchanged. Equivalent to
 .BR "goban-client reload" .
+.SH CONFIGURATION SAFETY
+Unknown YAML fields are rejected. Rule and source identifiers are restricted
+to a safe character set. Every rule requires a named ip capture; datepattern
+requires a named time capture; exclusion and trusted-proxy capture names must
+exist in the regex. Unsafe zero-width allowlists and kernel-invalid ban
+durations are refused.
+.PP
+Rules, sources, defaults, and the global allowlist support hot reload.
+Firewall, socket, logging, audit, and persistence settings require restart;
+a reload that changes them is refused.
+.SH SOURCE HEALTH
+Sources have starting, running, degraded, and stopped states. File sources use
+a bounded rotation/truncation-aware follower. Docker sources reconnect event
+and log streams and periodically reconcile matching containers. Journald
+builds apply an sdjournal data threshold. Fan-out queues are bounded and
+non-blocking; drops are counted rather than hidden.
+.SH BACKENDS
+.TP
+.B iptables
+Default. Creates timeout-capable IPv4/IPv6 ipsets, installs set-match drop
+rules in each configured banner.iptables_chains entry (INPUT and FORWARD by
+default), and uses direct ipset netlink for runtime ban/list/unban operations.
+Re-banning refreshes the kernel TTL.
+.TP
+.B nftables
+Uses nf_tables netlink directly. Creates one inet table, IPv4/IPv6 timeout
+sets, an input-hook chain, and an optional forward-hook chain.
+.PP
+Forward protection is required for normal bridged/routed container traffic.
+Hosts with a custom firewall manager should choose and test the appropriate
+FORWARD, DOCKER-USER, or dedicated chain explicitly.
+.SH DATE HANDLING
+Traditional syslog timestamps receive the nearest plausible year and are
+parsed in the configured timezone. A date-aware rule defaults to fail-closed:
+malformed or implausibly stale/future timestamps are dropped. The optional
+source_time policy explicitly permits source-event-time fallback.
+.SH REVERSE PROXIES
+A rule that extracts a forwarded client IP should also configure
+trusted_proxy_capture and trusted_proxies. The forwarded IP is rejected unless
+the captured direct peer belongs to an allowed proxy CIDR.
+.SH PERSISTENCE
+Strike state does not recreate kernel bans. Kernel sets survive a daemon
+restart but are normally lost at host reboot. The optional goban-persist.service
+saves only GoBan's default ipsets and default nftables table; custom names need
+a unit override.
 .SH EXIT STATUS
 .TP
 .B 0
-Clean shutdown after a signal.
+Clean shutdown.
 .TP
 .B 1
-Startup failure (bad config, missing capability, kernel rejection).
+Startup/runtime failure.
 .SH ENVIRONMENT
-.B goban-daemon
-ignores environment variables. All configuration is via the YAML file or
-command-line flags.
+Selected GOBAN_* variables overlay YAML before rule-directory loading and
+final default application. See README.md for the supported list.
 .SH CAPABILITIES
-The daemon needs CAP_NET_ADMIN to manage the kernel ban sets. The shipped
-systemd unit drops other capabilities. Operators MAY run the daemon as a
-non-root user with CAP_NET_ADMIN + CAP_NET_RAW set on the binary, but the
-typical configuration is root.
-.SH BACKEND SELECTION
-The
-.I banner.backend
-configuration key selects how bans are applied:
-.IP \fBiptables\fR
-(default) iptables with ipset. Requires the \fBiptables\fR, \fBip6tables\fR
-binaries on PATH (only used at Setup for one-time chain-rule install);
-hot-path ban operations go through native netlink to the ipset subsystem.
-.IP \fBnftables\fR
-Native netlink to the nf_tables subsystem (NFNL_SUBSYS_NFTABLES). Creates
-table \fIgoban\fR, two timeout-bearing sets, one input-hooked chain, and
-two drop rules. No external binary dependencies.
-.SH RECIDIVE
-GoBan ships a built-in \fBrecidive\fR rule (see
-.IR /etc/goban/rules.d/recidive.yaml )
-that tails its own audit log and re-bans IPs that have been banned 5+
-times in 24 hours for a week. The audit log's JSON format guarantees a
-stable field order so the rule's regex doesn't break on minor version
-upgrades.
-.PP
-Defense-in-depth against feedback loops: any rule named exactly
-\fBrecidive\fR auto-applies an excludes filter against its own ban events
-even if the YAML excludes line is removed.
+The daemon requires CAP_NET_ADMIN. Docker log sources additionally require
+access to the Docker socket. Journald support requires a journald-tagged build.
+The shipped systemd unit bounds capabilities and applies filesystem and kernel
+hardening.
 .SH SEE ALSO
 .BR goban-client (1),
-.BR fail2ban-server (1),
 .BR iptables (8),
 .BR ipset (8),
 .BR nft (8)
-.SH BUGS
-Report security issues via GitHub Security Advisories at
-https://github.com/izm1chael/goban/security/advisories/new
-.PP
-Bugs and feature requests:
-https://github.com/izm1chael/goban/issues
 .SH AUTHOR
 GoBan is developed by izm1chael. License: MIT.

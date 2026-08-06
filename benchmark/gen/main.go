@@ -48,9 +48,14 @@ func main() {
 		uniqueIPs   = flag.Int("unique-ips", 200, "starting unique IPs to cycle through")
 		controlFIFO = flag.String("control-fifo", "", "optional named pipe for soak-mode commands")
 		statsOut    = flag.String("stats-out", "", "append per-second line-count CSV to this path")
+		countOut    = flag.String("count-out", "", "write the exact emitted line count to this file on exit")
 		ipv6        = flag.Bool("ipv6", false, "use ipv6 source addresses")
 	)
 	flag.Parse()
+	if *rate < 1 || *uniqueIPs < 1 || (!(*controlFIFO != "") && *duration <= 0) {
+		fmt.Fprintln(os.Stderr, "rate, unique-ips, and fixed-run duration must be positive")
+		os.Exit(2)
+	}
 
 	st := &state{rate: *rate}
 	st.growIPs(*uniqueIPs, *ipv6)
@@ -151,6 +156,18 @@ func main() {
 	}
 	_ = w.Flush()
 	_ = f.Close()
+	if *countOut != "" {
+		tmp := *countOut + ".tmp"
+		if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", written)), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, "count-out:", err)
+			os.Exit(1)
+		}
+		if err := os.Rename(tmp, *countOut); err != nil {
+			_ = os.Remove(tmp)
+			fmt.Fprintln(os.Stderr, "count-out rename:", err)
+			os.Exit(1)
+		}
+	}
 	fmt.Fprintf(os.Stderr, "wrote %d lines\n", written)
 }
 

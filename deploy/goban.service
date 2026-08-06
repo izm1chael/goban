@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=exec
-ExecStart=/usr/local/bin/goban-daemon --config /etc/goban/goban.yaml
+ExecStart=/usr/bin/goban-daemon --config /etc/goban/goban.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s

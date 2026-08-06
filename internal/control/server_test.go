@@ -27,7 +27,8 @@ type fakeState struct {
 func (f *fakeState) Status() StatusResp {
 	return StatusResp{Version: "test", Uptime: "1s", StartedAt: time.Now(), TotalBans: len(f.banned)}
 }
-func (f *fakeState) Rules() []RuleInfo { return f.rules }
+func (f *fakeState) Rules() []RuleInfo     { return f.rules }
+func (f *fakeState) Sources() []SourceInfo { return []SourceInfo{{Name: "auth", Status: "running"}} }
 func (f *fakeState) Banned(_ context.Context) ([]BanInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -94,6 +95,13 @@ func TestServerRoundTrip(t *testing.T) {
 	}
 	if len(rules) != 1 || rules[0].Name != "sshd" {
 		t.Errorf("rules = %+v", rules)
+	}
+	sources, err := c.Sources(ctx)
+	if err != nil {
+		t.Fatalf("Sources: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Status != "running" {
+		t.Errorf("sources = %+v", sources)
 	}
 
 	if err := c.Ban(ctx, "1.2.3.4", "manual", time.Hour); err != nil {

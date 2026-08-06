@@ -3,7 +3,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"regexp"
@@ -61,11 +63,18 @@ type Config struct {
 // nftables subsystem instead.
 type BannerConfig struct {
 	Backend string `yaml:"backend"` // "iptables" (default) or "nftables"
+
+	// IPTablesChains are the filter-table chains where the ipset drop rule is
+	// installed. INPUT protects host services; FORWARD protects bridged and
+	// routed workloads such as normal Docker containers.
+	IPTablesChains []string `yaml:"iptables_chains"`
+
 	// nftables-only knobs (iptables uses Config.IPSetNameV4 / V6 instead).
-	Table string `yaml:"table"`
-	SetV4 string `yaml:"set_v4"`
-	SetV6 string `yaml:"set_v6"`
-	Chain string `yaml:"chain"`
+	Table        string `yaml:"table"`
+	SetV4        string `yaml:"set_v4"`
+	SetV6        string `yaml:"set_v6"`
+	Chain        string `yaml:"chain"`         // input-hook chain
+	ForwardChain string `yaml:"forward_chain"` // forward-hook chain; empty disables forwarded-traffic protection
 }
 
 // RuleDefaults supplies fallback per-rule settings when a rule leaves them
@@ -107,15 +116,19 @@ type SourceConfig struct {
 // events. A rule named "recidive" auto-applies excludes[rule]=recidive even
 // if Excludes is empty, as defense against operator misconfig.
 type RuleConfig struct {
-	Name        string            `yaml:"name"`
-	Source      string            `yaml:"source"`
-	Regex       string            `yaml:"regex"`
-	MaxRetries  int               `yaml:"max_retries"`
-	FindTime    time.Duration     `yaml:"findtime"`
-	BanTime     time.Duration     `yaml:"bantime"`
-	Allowlist   []string          `yaml:"allowlist"`
-	Datepattern string            `yaml:"datepattern"`
-	Excludes    map[string]string `yaml:"excludes"`
+	Name                string            `yaml:"name"`
+	Source              string            `yaml:"source"`
+	Regex               string            `yaml:"regex"`
+	MaxRetries          int               `yaml:"max_retries"`
+	FindTime            time.Duration     `yaml:"findtime"`
+	BanTime             time.Duration     `yaml:"bantime"`
+	Allowlist           []string          `yaml:"allowlist"`
+	Datepattern         string            `yaml:"datepattern"`
+	Timezone            string            `yaml:"timezone"`            // IANA name or "Local"; default Local
+	DateFailurePolicy   string            `yaml:"date_failure_policy"` // drop (default) or source_time
+	Excludes            map[string]string `yaml:"excludes"`
+	TrustedProxyCapture string            `yaml:"trusted_proxy_capture"` // named capture containing the direct proxy peer
+	TrustedProxies      []string          `yaml:"trusted_proxies"`       // CIDRs permitted to supply the captured client IP
 }
 
 // DefaultConfig returns a Config populated with safe defaults.
@@ -130,10 +143,6 @@ func DefaultConfig() *Config {
 		Allowlist: []string{
 			"127.0.0.0/8",
 			"::1/128",
-			"10.0.0.0/8",
-			"172.16.0.0/12",
-			"192.168.0.0/16",
-			"fc00::/7",
 		},
 		Defaults: RuleDefaults{
 			MaxRetries: 5,
@@ -147,11 +156,13 @@ func DefaultConfig() *Config {
 		StatePath:         "/var/lib/goban/state.gob",
 		StateSaveInterval: 30 * time.Second,
 		Banner: BannerConfig{
-			Backend: "iptables",
-			Table:   "goban",
-			SetV4:   "goban-ban-v4",
-			SetV6:   "goban-ban-v6",
-			Chain:   "input",
+			Backend:        "iptables",
+			IPTablesChains: []string{"INPUT", "FORWARD"},
+			Table:          "goban",
+			SetV4:          "goban-ban-v4",
+			SetV6:          "goban-ban-v6",
+			Chain:          "input",
+			ForwardChain:   "forward",
 		},
 	}
 }
@@ -163,11 +174,29 @@ func LoadConfigFromFile(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	cfg.ApplyRuleDefaults()
+	if err := requireYAMLEOF(dec); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	// Rule defaults are intentionally applied only after every configuration
+	// layer (file, environment, CLI, and rules.d) has been merged.
 	return cfg, nil
+}
+
+func requireYAMLEOF(dec *yaml.Decoder) error {
+	var extra yaml.Node
+	err := dec.Decode(&extra)
+	if err == io.EOF {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("multiple YAML documents are not supported")
 }
 
 // ApplyRuleDefaults fills in any zero per-rule fields with the configured
@@ -199,6 +228,14 @@ func (c *Config) Validate() error {
 	if c.IPv6 && c.IPSetNameV6 == "" {
 		return fmt.Errorf("ipset_name_v6 must not be empty when ipv6 is true")
 	}
+	for i, cidr := range c.Allowlist {
+		if cidr == "0.0.0.0/0" || cidr == "::/0" {
+			return fmt.Errorf("allowlist[%d]=%q would disable protection (refused)", i, cidr)
+		}
+		if _, err := netip.ParsePrefix(cidr); err != nil {
+			return fmt.Errorf("allowlist[%d]=%q: %w", i, cidr, err)
+		}
+	}
 	if err := c.validateBanner(); err != nil {
 		return err
 	}
@@ -217,19 +254,43 @@ func (c *Config) validateBanner() error {
 		return fmt.Errorf("banner.backend %q: must be iptables or nftables", c.Banner.Backend)
 	}
 	if c.Banner.Backend != "nftables" {
+		if len(c.Banner.IPTablesChains) == 0 {
+			return fmt.Errorf("banner.iptables_chains must contain at least one chain")
+		}
+		seen := make(map[string]struct{}, len(c.Banner.IPTablesChains))
+		for i, chain := range c.Banner.IPTablesChains {
+			if !validIPTablesChain(chain) {
+				return fmt.Errorf("banner.iptables_chains[%d]=%q: invalid chain name (1-28 safe characters)", i, chain)
+			}
+			if _, dup := seen[chain]; dup {
+				return fmt.Errorf("banner.iptables_chains[%d]=%q: duplicate chain", i, chain)
+			}
+			seen[chain] = struct{}{}
+		}
 		return nil
 	}
-	if c.Banner.Table == "" {
-		return fmt.Errorf("banner.table must not be empty when backend=nftables")
+	for field, value := range map[string]string{
+		"table":  c.Banner.Table,
+		"set_v4": c.Banner.SetV4,
+		"chain":  c.Banner.Chain,
+	} {
+		if value == "" {
+			return fmt.Errorf("banner.%s must not be empty when backend=nftables", field)
+		}
+		if !validNFTName(value) {
+			return fmt.Errorf("banner.%s=%q: invalid nftables identifier (1-31 safe characters)", field, value)
+		}
 	}
-	if c.Banner.SetV4 == "" {
-		return fmt.Errorf("banner.set_v4 must not be empty when backend=nftables")
+	if c.IPv6 {
+		if c.Banner.SetV6 == "" {
+			return fmt.Errorf("banner.set_v6 must not be empty when ipv6 is true and backend=nftables")
+		}
+		if !validNFTName(c.Banner.SetV6) {
+			return fmt.Errorf("banner.set_v6=%q: invalid nftables identifier (1-31 safe characters)", c.Banner.SetV6)
+		}
 	}
-	if c.IPv6 && c.Banner.SetV6 == "" {
-		return fmt.Errorf("banner.set_v6 must not be empty when ipv6 is true and backend=nftables")
-	}
-	if c.Banner.Chain == "" {
-		return fmt.Errorf("banner.chain must not be empty when backend=nftables")
+	if c.Banner.ForwardChain != "" && !validNFTName(c.Banner.ForwardChain) {
+		return fmt.Errorf("banner.forward_chain=%q: invalid nftables identifier (1-31 safe characters)", c.Banner.ForwardChain)
 	}
 	return nil
 }
@@ -237,8 +298,8 @@ func (c *Config) validateBanner() error {
 func (c *Config) validateSources() (map[string]struct{}, error) {
 	names := make(map[string]struct{}, len(c.Sources))
 	for i, s := range c.Sources {
-		if s.Name == "" {
-			return nil, fmt.Errorf("sources[%d]: name must not be empty", i)
+		if !validIdentifier(s.Name) {
+			return nil, fmt.Errorf("sources[%d]: name %q must match %s", i, s.Name, identifierPattern.String())
 		}
 		if _, dup := names[s.Name]; dup {
 			return nil, fmt.Errorf("sources[%d]: duplicate name %q", i, s.Name)
@@ -265,8 +326,8 @@ func (c *Config) validateSources() (map[string]struct{}, error) {
 func (c *Config) validateRules(srcNames map[string]struct{}) error {
 	ruleNames := make(map[string]struct{}, len(c.Rules))
 	for i, r := range c.Rules {
-		if r.Name == "" {
-			return fmt.Errorf("rules[%d]: name must not be empty", i)
+		if !validIdentifier(r.Name) {
+			return fmt.Errorf("rules[%d]: name %q must match %s", i, r.Name, identifierPattern.String())
 		}
 		if _, dup := ruleNames[r.Name]; dup {
 			return fmt.Errorf("rules[%d]: duplicate name %q", i, r.Name)
@@ -299,8 +360,11 @@ func validateRuleConfig(i int, r RuleConfig) error {
 	if r.FindTime <= 0 {
 		return fmt.Errorf("rules[%d] %q: findtime must be > 0", i, r.Name)
 	}
-	if r.BanTime <= 0 {
-		return fmt.Errorf("rules[%d] %q: bantime must be > 0", i, r.Name)
+	if r.BanTime < time.Second {
+		return fmt.Errorf("rules[%d] %q: bantime must be at least 1s", i, r.Name)
+	}
+	if r.BanTime/time.Second > time.Duration(^uint32(0)) {
+		return fmt.Errorf("rules[%d] %q: bantime exceeds backend maximum of %ds", i, r.Name, uint64(^uint32(0)))
 	}
 	for j, cidr := range r.Allowlist {
 		if cidr == "0.0.0.0/0" || cidr == "::/0" {
@@ -310,12 +374,72 @@ func validateRuleConfig(i int, r RuleConfig) error {
 			return fmt.Errorf("rules[%d] %q: allowlist[%d]=%q: %w", i, r.Name, j, cidr, err)
 		}
 	}
+	captures := captureNames(re)
+	if r.DateFailurePolicy != "" && r.DateFailurePolicy != "drop" && r.DateFailurePolicy != "source_time" {
+		return fmt.Errorf("rules[%d] %q: date_failure_policy must be drop or source_time", i, r.Name)
+	}
+	if r.Timezone != "" && r.Timezone != "Local" {
+		if _, err := time.LoadLocation(r.Timezone); err != nil {
+			return fmt.Errorf("rules[%d] %q: timezone %q: %w", i, r.Name, r.Timezone, err)
+		}
+	}
 	if r.Datepattern != "" {
 		if _, err := datepatternResolve(r.Datepattern); err != nil {
 			return fmt.Errorf("rules[%d] %q: %w", i, r.Name, err)
 		}
+		if _, ok := captures["time"]; !ok {
+			return fmt.Errorf("rules[%d] %q: datepattern requires a named capture group (?P<time>...)", i, r.Name)
+		}
+	}
+	if (r.TrustedProxyCapture == "") != (len(r.TrustedProxies) == 0) {
+		return fmt.Errorf("rules[%d] %q: trusted_proxy_capture and trusted_proxies must be configured together", i, r.Name)
+	}
+	if r.TrustedProxyCapture != "" {
+		if _, ok := captures[r.TrustedProxyCapture]; !ok {
+			return fmt.Errorf("rules[%d] %q: trusted_proxy_capture %q does not name a regex capture", i, r.Name, r.TrustedProxyCapture)
+		}
+		for j, cidr := range r.TrustedProxies {
+			if cidr == "0.0.0.0/0" || cidr == "::/0" {
+				return fmt.Errorf("rules[%d] %q: trusted_proxies[%d]=%q trusts every sender (refused)", i, r.Name, j, cidr)
+			}
+			if _, err := netip.ParsePrefix(cidr); err != nil {
+				return fmt.Errorf("rules[%d] %q: trusted_proxies[%d]=%q: %w", i, r.Name, j, cidr, err)
+			}
+		}
+	}
+	for name, value := range r.Excludes {
+		if name == "" {
+			return fmt.Errorf("rules[%d] %q: excludes contains an empty capture name", i, r.Name)
+		}
+		if value == "" {
+			return fmt.Errorf("rules[%d] %q: excludes[%q] must not be empty", i, r.Name, name)
+		}
+		if _, ok := captures[name]; !ok {
+			return fmt.Errorf("rules[%d] %q: excludes[%q] does not name a regex capture", i, r.Name, name)
+		}
 	}
 	return nil
+}
+
+var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+var firewallChainPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}$`)
+
+func validIdentifier(s string) bool { return identifierPattern.MatchString(s) }
+func validIPTablesChain(s string) bool {
+	return len(s) >= 1 && len(s) <= 28 && firewallChainPattern.MatchString(s)
+}
+func validNFTName(s string) bool {
+	return len(s) >= 1 && len(s) <= 31 && firewallChainPattern.MatchString(s)
+}
+
+func captureNames(re *regexp.Regexp) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, name := range re.SubexpNames() {
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 func hasIPCapture(re *regexp.Regexp) bool {

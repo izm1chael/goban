@@ -40,13 +40,16 @@ func (a *Allowlist) AddLocalInterfaces() error {
 		if !ok {
 			continue
 		}
-		ones, _ := ipnet.Mask.Size()
 		ip, ok := netip.AddrFromSlice(ipnet.IP)
 		if !ok {
 			continue
 		}
 		ip = ip.Unmap()
-		p, err := ip.Prefix(ones)
+		bits := 128
+		if ip.Is4() {
+			bits = 32
+		}
+		p, err := ip.Prefix(bits)
 		if err != nil {
 			continue
 		}

@@ -78,7 +78,7 @@ func (c *Client) CreateChain(ctx context.Context, table, name string) error {
 		return err
 	}
 	seq := c.nextSeq()
-	return c.sendOne(ctx, c.buildNewChain(seq, table, name), seq, false)
+	return c.sendOne(ctx, c.buildNewChain(seq, table, name, hookInput), seq, false)
 }
 
 // CreateDropRule creates one "saddr @set drop" rule.
@@ -105,33 +105,59 @@ func (c *Client) Setup(ctx context.Context, cfg SetupConfig) error {
 	if err := validName("chain", cfg.Chain); err != nil {
 		return err
 	}
+	if cfg.ForwardChain != "" {
+		if err := validName("chain", cfg.ForwardChain); err != nil {
+			return err
+		}
+	}
 
 	beginSeq := c.nextSeq()
 	tableSeq := c.nextSeq()
-	chainSeq := c.nextSeq()
+	inputChainSeq := c.nextSeq()
 	setV4Seq := c.nextSeq()
-	ruleV4Seq := c.nextSeq()
-	var setV6Seq, ruleV6Seq uint32
+	inputRuleV4Seq := c.nextSeq()
+	var setV6Seq, inputRuleV6Seq uint32
 	if cfg.IPv6 {
 		setV6Seq = c.nextSeq()
-		ruleV6Seq = c.nextSeq()
+		inputRuleV6Seq = c.nextSeq()
+	}
+	var forwardChainSeq, forwardRuleV4Seq, forwardRuleV6Seq uint32
+	if cfg.ForwardChain != "" {
+		forwardChainSeq = c.nextSeq()
+		forwardRuleV4Seq = c.nextSeq()
+		if cfg.IPv6 {
+			forwardRuleV6Seq = c.nextSeq()
+		}
 	}
 	endSeq := c.nextSeq()
 
 	batch := batchBegin(beginSeq)
 	batch = append(batch, c.buildNewTable(tableSeq, cfg.Table)...)
-	batch = append(batch, c.buildNewChain(chainSeq, cfg.Table, cfg.Chain)...)
+	batch = append(batch, c.buildNewChain(inputChainSeq, cfg.Table, cfg.Chain, hookInput)...)
 	batch = append(batch, c.buildNewSet(setV4Seq, cfg.Table, cfg.SetV4, IPv4)...)
-	batch = append(batch, c.buildSetDropRule(ruleV4Seq, cfg.Table, cfg.Chain, cfg.SetV4, IPv4)...)
+	batch = append(batch, c.buildSetDropRule(inputRuleV4Seq, cfg.Table, cfg.Chain, cfg.SetV4, IPv4)...)
 	if cfg.IPv6 {
 		batch = append(batch, c.buildNewSet(setV6Seq, cfg.Table, cfg.SetV6, IPv6)...)
-		batch = append(batch, c.buildSetDropRule(ruleV6Seq, cfg.Table, cfg.Chain, cfg.SetV6, IPv6)...)
+		batch = append(batch, c.buildSetDropRule(inputRuleV6Seq, cfg.Table, cfg.Chain, cfg.SetV6, IPv6)...)
+	}
+	if cfg.ForwardChain != "" {
+		batch = append(batch, c.buildNewChain(forwardChainSeq, cfg.Table, cfg.ForwardChain, hookForward)...)
+		batch = append(batch, c.buildSetDropRule(forwardRuleV4Seq, cfg.Table, cfg.ForwardChain, cfg.SetV4, IPv4)...)
+		if cfg.IPv6 {
+			batch = append(batch, c.buildSetDropRule(forwardRuleV6Seq, cfg.Table, cfg.ForwardChain, cfg.SetV6, IPv6)...)
+		}
 	}
 	batch = append(batch, batchEnd(endSeq)...)
 
-	expectAcks := []uint32{tableSeq, chainSeq, setV4Seq, ruleV4Seq}
+	expectAcks := []uint32{tableSeq, inputChainSeq, setV4Seq, inputRuleV4Seq}
 	if cfg.IPv6 {
-		expectAcks = append(expectAcks, setV6Seq, ruleV6Seq)
+		expectAcks = append(expectAcks, setV6Seq, inputRuleV6Seq)
+	}
+	if cfg.ForwardChain != "" {
+		expectAcks = append(expectAcks, forwardChainSeq, forwardRuleV4Seq)
+		if cfg.IPv6 {
+			expectAcks = append(expectAcks, forwardRuleV6Seq)
+		}
 	}
 	return c.sendBatch(ctx, batch, expectAcks)
 }

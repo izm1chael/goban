@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strings"
 )
 
 // Matcher pairs a compiled regex with the index of its "ip" capture group and,
@@ -93,11 +94,29 @@ func extractIP(line string, idx []int, i int) (netip.Addr, bool) {
 	if start < 0 || end < 0 || end > len(line) {
 		return netip.Addr{}, false
 	}
-	addr, err := netip.ParseAddr(line[start:end])
-	if err != nil {
+	return parseCapturedAddr(line[start:end])
+}
+
+// CaptureAddr parses a named capture as an IP address. Plain IPv4/IPv6,
+// bracketed IPv6, and IP:port forms are accepted so a trusted reverse-proxy
+// peer can be validated without trusting a spoofable forwarded header alone.
+func (m *Matcher) CaptureAddr(name, line string) (netip.Addr, bool) {
+	raw := m.Capture(name, line)
+	if raw == "" {
 		return netip.Addr{}, false
 	}
-	return addr.Unmap(), true
+	return parseCapturedAddr(raw)
+}
+
+func parseCapturedAddr(raw string) (netip.Addr, bool) {
+	raw = strings.TrimSpace(raw)
+	if addr, err := netip.ParseAddr(strings.Trim(raw, "[]")); err == nil {
+		return addr.Unmap(), true
+	}
+	if ap, err := netip.ParseAddrPort(raw); err == nil {
+		return ap.Addr().Unmap(), true
+	}
+	return netip.Addr{}, false
 }
 
 // extractString pulls the substring at capture index i out of the regex's
@@ -114,7 +133,15 @@ func extractString(line string, idx []int, i int) string {
 	return line[start:end]
 }
 
-// String returns the source pattern (useful for logs).
-func (m *Matcher) String() string {
-	return m.re.String()
+// HasCapture reports whether the compiled expression contains a named group.
+func (m *Matcher) HasCapture(name string) bool {
+	for _, n := range m.re.SubexpNames() {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
+
+// String returns the source pattern (useful for logs).
+func (m *Matcher) String() string { return m.re.String() }

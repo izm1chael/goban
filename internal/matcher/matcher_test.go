@@ -118,3 +118,21 @@ func TestCapture(t *testing.T) {
 		t.Errorf("Capture on non-matching line = %q, want empty", got)
 	}
 }
+
+func TestCaptureAddrAcceptsProxyPeerForms(t *testing.T) {
+	m, err := New(`peer=(?P<peer>\S+) client=(?P<ip>\S+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"peer=10.0.0.2:443 client=198.51.100.7":      "10.0.0.2",
+		"peer=[2001:db8::2]:443 client=198.51.100.7": "2001:db8::2",
+		"peer=2001:db8::2 client=198.51.100.7":       "2001:db8::2",
+	}
+	for line, want := range cases {
+		got, ok := m.CaptureAddr("peer", line)
+		if !ok || got.String() != want {
+			t.Errorf("CaptureAddr(%q)=(%v,%v), want %s", line, got, ok, want)
+		}
+	}
+}

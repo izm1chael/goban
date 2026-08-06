@@ -60,11 +60,12 @@ type IPSetCommander interface {
 }
 
 // IPTables is the production Banner. It manages two ipsets (v4 + v6) and
-// installs INPUT chain rules referencing them.
+// installs configured filter-chain rules referencing them.
 type IPTables struct {
 	SetV4   string
 	SetV6   string
 	UseIPv6 bool
+	Chains  []string
 
 	// runner handles iptables/ip6tables shell-exec (one-time chain-rule
 	// install at Setup); the hot path goes through ipsetCmd.
@@ -85,6 +86,7 @@ func NewIPTables(setV4, setV6 string, useIPv6 bool) *IPTables {
 		SetV4:   setV4,
 		SetV6:   setV6,
 		UseIPv6: useIPv6,
+		Chains:  []string{"INPUT", "FORWARD"},
 		runner:  execRunner{},
 		ruleOf:  make(map[netip.Addr]string),
 	}
@@ -92,6 +94,11 @@ func NewIPTables(setV4, setV6 string, useIPv6 bool) *IPTables {
 
 // SetRunner overrides the process runner used for iptables/ip6tables (tests).
 func (b *IPTables) SetRunner(r Runner) { b.runner = r }
+
+// SetChains selects the filter-table chains that enforce the ban set.
+func (b *IPTables) SetChains(chains []string) {
+	b.Chains = append([]string(nil), chains...)
+}
 
 // SetIPSetCommander overrides the netlink ipset client (tests). Once set,
 // Close will not invoke the commander's Close — caller owns its lifecycle.
@@ -102,7 +109,7 @@ func (b *IPTables) SetIPSetCommander(c IPSetCommander) {
 
 // Setup verifies the firewall binaries exist, opens the netlink ipset
 // client (unless one was injected), creates the ipsets, and installs the
-// INPUT-chain DROP rules referencing them. All operations are idempotent.
+// configured-chain DROP rules referencing them. All operations are idempotent.
 func (b *IPTables) Setup(ctx context.Context) error {
 	// iptables is still shell-exec'd for chain-rule install — verify it's there.
 	if _, err := exec.LookPath("iptables"); err != nil {
@@ -126,30 +133,38 @@ func (b *IPTables) Setup(ctx context.Context) error {
 	if err := b.ipsetCmd.Create(ctx, ipset.CreateOptions{Name: b.SetV4, Family: ipset.IPv4}); err != nil {
 		return fmt.Errorf("create ipv4 set: %w", err)
 	}
-	if err := b.ensureRule(ctx, "iptables", b.SetV4); err != nil {
-		return fmt.Errorf("install iptables rule: %w", err)
+	for _, chain := range b.Chains {
+		if err := b.ensureRuleInChain(ctx, "iptables", chain, b.SetV4); err != nil {
+			return fmt.Errorf("install iptables %s rule: %w", chain, err)
+		}
 	}
 	if b.UseIPv6 {
 		if err := b.ipsetCmd.Create(ctx, ipset.CreateOptions{Name: b.SetV6, Family: ipset.IPv6}); err != nil {
 			return fmt.Errorf("create ipv6 set: %w", err)
 		}
-		if err := b.ensureRule(ctx, "ip6tables", b.SetV6); err != nil {
-			return fmt.Errorf("install ip6tables rule: %w", err)
+		for _, chain := range b.Chains {
+			if err := b.ensureRuleInChain(ctx, "ip6tables", chain, b.SetV6); err != nil {
+				return fmt.Errorf("install ip6tables %s rule: %w", chain, err)
+			}
 		}
 	}
 	return nil
 }
 
 func (b *IPTables) ensureRule(ctx context.Context, ipt, set string) error {
+	return b.ensureRuleInChain(ctx, ipt, "INPUT", set)
+}
+
+func (b *IPTables) ensureRuleInChain(ctx context.Context, ipt, chain, set string) error {
 	ruleArgs := []string{"-m", "set", "--match-set", set, "src", "-j", "DROP"}
-	checkArgs := append([]string{"-C", "INPUT"}, ruleArgs...)
+	checkArgs := append([]string{"-C", chain}, ruleArgs...)
 	_, _, err := b.runner.Run(ctx, ipt, checkArgs...)
 	if err == nil {
 		return nil
 	}
-	insertArgs := append([]string{"-I", "INPUT", "1"}, ruleArgs...)
+	insertArgs := append([]string{"-I", chain, "1"}, ruleArgs...)
 	if _, stderr, err := b.runner.Run(ctx, ipt, insertArgs...); err != nil {
-		return fmt.Errorf("%s -I INPUT: %w (%s)", ipt, err, strings.TrimSpace(string(stderr)))
+		return fmt.Errorf("%s -I %s: %w (%s)", ipt, chain, err, strings.TrimSpace(string(stderr)))
 	}
 	return nil
 }
@@ -157,6 +172,9 @@ func (b *IPTables) ensureRule(ctx context.Context, ipt, set string) error {
 // Ban adds ip to the appropriate ipset with kernel-side TTL.
 func (b *IPTables) Ban(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
 	if err := validateIP(ip); err != nil {
+		return err
+	}
+	if err := validateTTL(ttl); err != nil {
 		return err
 	}
 	family := ipset.FamilyOf(ip)
@@ -193,8 +211,11 @@ func (b *IPTables) BanBatch(ctx context.Context, reqs []BanRequest) error {
 		if err := validateIP(r.IP); err != nil {
 			return err
 		}
+		if err := validateTTL(r.TTL); err != nil {
+			return err
+		}
 		family := ipset.FamilyOf(r.IP)
-		entry := ipset.Entry{IP: r.IP, Timeout: uint32(int64(r.TTL.Seconds()))}
+		entry := ipset.Entry{IP: r.IP, Timeout: uint32(r.TTL / time.Second)}
 		if family == ipset.IPv4 {
 			v4 = append(v4, entry)
 			v4Rules[r.IP] = r.Rule

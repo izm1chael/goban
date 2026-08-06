@@ -156,7 +156,13 @@ func (t *Tracker) Sweep() int {
 		s := &t.shards[i]
 		s.mu.Lock()
 		for addr, r := range s.records {
-			if len(r.strikes) == 0 || !r.strikes[len(r.strikes)-1].After(cutoff) {
+			newest := time.Time{}
+			for _, ts := range r.strikes {
+				if ts.After(newest) {
+					newest = ts
+				}
+			}
+			if newest.IsZero() || !newest.After(cutoff) {
 				delete(s.records, addr)
 				dropped++
 			}
@@ -211,22 +217,27 @@ func (t *Tracker) FindTime() time.Duration { return t.findtime }
 // stateVersion is the schema version of the gob-serialized tracker state.
 // Bump on any change to savedState's shape. A loader that sees a different
 // version discards the state with a warning rather than risking misdecoding.
-const stateVersion uint32 = 1
+const stateVersion uint32 = 2
 
 // savedState is what Save/Load serialize. Each shard's records are flattened
 // into a flat map keyed by IP so the gob output doesn't carry the internal
 // shardCount as part of the wire shape — if we ever change shardCount,
 // existing state still loads (it just re-distributes on Hit).
 type savedState struct {
-	Version uint32
-	SavedAt time.Time
-	Records map[netip.Addr][]time.Time
+	Version     uint32
+	Fingerprint string
+	SavedAt     time.Time
+	Records     map[netip.Addr][]time.Time
 }
 
 // Save writes the tracker's strike state to w as a gob-encoded blob. Safe
 // for concurrent use with Hit/Reset — each shard's snapshot is taken under
 // its own mutex.
-func (t *Tracker) Save(w io.Writer) error {
+func (t *Tracker) Save(w io.Writer) error { return t.SaveWithFingerprint(w, "") }
+
+// SaveWithFingerprint persists tracker state together with the semantic rule
+// fingerprint that produced it.
+func (t *Tracker) SaveWithFingerprint(w io.Writer, fingerprint string) error {
 	flat := make(map[netip.Addr][]time.Time)
 	for i := range t.shards {
 		s := &t.shards[i]
@@ -243,9 +254,10 @@ func (t *Tracker) Save(w io.Writer) error {
 	}
 	enc := gob.NewEncoder(w)
 	return enc.Encode(savedState{
-		Version: stateVersion,
-		SavedAt: t.Now(),
-		Records: flat,
+		Version:     stateVersion,
+		Fingerprint: fingerprint,
+		SavedAt:     t.Now(),
+		Records:     flat,
 	})
 }
 
@@ -255,7 +267,11 @@ func (t *Tracker) Save(w io.Writer) error {
 //
 // Load is not concurrency-safe with Hit; callers should invoke it before
 // the daemon starts processing lines (typically right after construction).
-func (t *Tracker) Load(r io.Reader) error {
+func (t *Tracker) Load(r io.Reader) error { return t.LoadWithFingerprint(r, "") }
+
+// LoadWithFingerprint refuses state produced by a semantically different
+// rule, preventing old strikes from being reinterpreted after a rule change.
+func (t *Tracker) LoadWithFingerprint(r io.Reader, expectedFingerprint string) error {
 	dec := gob.NewDecoder(r)
 	var st savedState
 	if err := dec.Decode(&st); err != nil {
@@ -266,6 +282,9 @@ func (t *Tracker) Load(r io.Reader) error {
 	}
 	if st.Version != stateVersion {
 		return fmt.Errorf("state version %d does not match expected %d", st.Version, stateVersion)
+	}
+	if expectedFingerprint != "" && st.Fingerprint != expectedFingerprint {
+		return fmt.Errorf("state fingerprint %q does not match expected %q", st.Fingerprint, expectedFingerprint)
 	}
 	for addr, strikes := range st.Records {
 		s := t.shardFor(addr)

@@ -81,7 +81,6 @@ func ApplyEnvOverrides(cfg *Config) error {
 		}
 		cfg.Defaults.MaxRetries = n
 	}
-	cfg.ApplyRuleDefaults()
 	return nil
 }
 

@@ -1,0 +1,32 @@
+log_level: info
+sock_path: /run/goban/goban.sock
+socket_mode: 0o660
+socket_group: goban
+allowlist:
+  - 127.0.0.0/8
+  - ::1/128
+defaults:
+  max_retries: 5
+  findtime: 1m
+  bantime: 5m
+rules_dir: ""
+sources:
+  - type: docker
+    name: victim-logs
+    container: goban-victim
+rules:
+  - name: smoke-nginx-401
+    source: victim-logs
+    regex: '^(?P<ip>\S+) .*"GET /.*" 401 '
+    max_retries: 5
+    findtime: 1m
+    bantime: 5m
+replay_on_start: false
+flush_on_exit: true
+ipv6: true
+banner:
+  backend: iptables
+  iptables_chains: [INPUT, FORWARD]
+state_path: /var/lib/goban/state.gob
+state_save_interval: 30s
+audit_log: /var/log/goban/audit.log

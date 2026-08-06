@@ -2,21 +2,24 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net/netip"
 	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/rs/zerolog"
+
+	"github.com/izm1chael/goban/internal/allowlist"
+	"github.com/izm1chael/goban/internal/banner"
 	"github.com/izm1chael/goban/internal/control"
 	"github.com/izm1chael/goban/internal/matcher"
-	"github.com/izm1chael/goban/internal/tracker"
+	"github.com/izm1chael/goban/internal/rule"
+	"github.com/izm1chael/goban/internal/source"
 )
 
 var version = "dev"
@@ -32,6 +35,7 @@ Usage:
 Commands:
   status                       show daemon status
   rules                        list rules with hit/ban counters
+  sources                      show live source health and queue drops
   list                         list currently-banned IPs
   unban <ip>                   remove a ban
   ban <ip> --rule manual [--ttl 1h]   manually ban an IP (rule label required)
@@ -78,6 +82,8 @@ func run() error {
 		return doStatus(ctx, c, asJSON)
 	case "rules":
 		return doRules(ctx, c, asJSON)
+	case "sources":
+		return doSources(ctx, c, asJSON)
 	case "list", "banned":
 		return doList(ctx, c, asJSON)
 	case "unban":
@@ -110,7 +116,11 @@ func doStatus(ctx context.Context, c *control.Client, asJSON bool) error {
 	fmt.Printf("version:    %s\n", st.Version)
 	fmt.Printf("uptime:     %s\n", st.Uptime)
 	fmt.Printf("started:    %s\n", st.StartedAt.Format(time.RFC3339))
-	fmt.Printf("sources:    %d\n", st.NumSources)
+	fmt.Printf("sources:    %d (%d degraded)\n", st.NumSources, st.DegradedSources)
+	fmt.Printf("dropped:    %d lines\n", st.DroppedLines)
+	if st.BannerError != "" {
+		fmt.Printf("banner:     ERROR: %s\n", st.BannerError)
+	}
 	fmt.Printf("rules:      %d\n", st.NumRules)
 	fmt.Printf("total bans: %d\n", st.TotalBans)
 	return nil
@@ -125,11 +135,33 @@ func doRules(ctx context.Context, c *control.Client, asJSON bool) error {
 		return printJSON(rules)
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSOURCE\tTHRESHOLD\tFINDTIME\tBANTIME\tTRACKED\tHITS\tBANS\tMISSES")
+	fmt.Fprintln(w, "NAME\tSOURCE\tTHRESHOLD\tFINDTIME\tBANTIME\tTRACKED\tHITS\tBANS\tMISSES\tDATE_DROPS")
 	for _, r := range rules {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%d\t%d\t%d\t%d\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
 			r.Name, r.Source, r.Threshold, r.FindTime, r.BanTime,
-			r.Tracked, r.Hits, r.Bans, r.Misses)
+			r.Tracked, r.Hits, r.Bans, r.Misses, r.DateDrops)
+	}
+	return w.Flush()
+}
+
+func doSources(ctx context.Context, c *control.Client, asJSON bool) error {
+	sources, err := c.Sources(ctx)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return printJSON(sources)
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSTATUS\tSUBSCRIBERS\tDELIVERED\tDROPPED\tRECONNECTS\tLAST_EVENT\tLAST_ERROR")
+	for _, src := range sources {
+		lastEvent := "-"
+		if !src.LastEventAt.IsZero() {
+			lastEvent = src.LastEventAt.Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\n",
+			src.Name, src.Status, src.Subscribers, src.Delivered, src.Dropped,
+			src.Reconnects, lastEvent, src.LastError)
 	}
 	return w.Flush()
 }
@@ -204,40 +236,66 @@ func doTest(ctx context.Context, c *control.Client, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *ruleName == "" {
-		return fmt.Errorf("usage: goban-client test --rule NAME <logfile|->")
-	}
-	if fs.NArg() != 1 {
+	if *ruleName == "" || fs.NArg() != 1 {
 		return fmt.Errorf("usage: goban-client test --rule NAME <logfile|->")
 	}
 	target := fs.Arg(0)
 
-	// Fetch the rule's full config from the daemon.
 	rules, err := c.Rules(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch /rules: %w", err)
 	}
-	var target_rule *control.RuleInfo
+	var info *control.RuleInfo
 	for i := range rules {
 		if rules[i].Name == *ruleName {
-			target_rule = &rules[i]
+			info = &rules[i]
 			break
 		}
 	}
-	if target_rule == nil {
+	if info == nil {
 		return fmt.Errorf("rule %q not loaded by the daemon", *ruleName)
 	}
-	if target_rule.Regex == "" {
-		return fmt.Errorf("daemon did not return the rule's regex (running an older binary?)")
+	if info.Regex == "" {
+		return fmt.Errorf("daemon did not return the effective rule configuration")
 	}
 
-	m, err := matcher.New(target_rule.Regex)
+	global, err := allowlist.New(info.GlobalAllowlist)
+	if err != nil {
+		return fmt.Errorf("global allowlist: %w", err)
+	}
+	perRule, err := allowlist.New(info.Allowlist)
+	if err != nil {
+		return fmt.Errorf("rule allowlist: %w", err)
+	}
+	trustedProxies, err := allowlist.New(info.TrustedProxies)
+	if err != nil {
+		return fmt.Errorf("trusted proxies: %w", err)
+	}
+
+	type banEvent struct {
+		ip                string
+		bannedAt, expires time.Time
+	}
+	var simulated []banEvent
+	r, err := rule.New(rule.Config{
+		Name: info.Name, SourceName: info.Source, Pattern: info.Regex,
+		MaxRetries: info.Threshold, FindTime: info.FindTime, BanTime: info.BanTime,
+		Datepattern: info.Datepattern, Timezone: info.Timezone,
+		DateFailurePolicy: info.DateFailurePolicy, Excludes: info.Excludes,
+		TrustedProxyCapture: info.TrustedProxyCapture, TrustedProxies: trustedProxies,
+		Allowlist: global, AllowlistRule: perRule, Banner: banner.NewNoop(), Logger: zerolog.Nop(),
+		OnBan: func(ev rule.BanEvent) {
+			simulated = append(simulated, banEvent{ip: ev.IP, bannedAt: ev.OccurredAt, expires: ev.OccurredAt.Add(ev.TTL)})
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("construct rule: %w", err)
+	}
+	probe, err := matcher.New(info.Regex)
 	if err != nil {
 		return fmt.Errorf("compile rule regex: %w", err)
 	}
-	tr := tracker.New(target_rule.Threshold, target_rule.FindTime)
 
-	// Open the input — file path, or stdin if "-".
 	var in io.Reader
 	if target == "-" {
 		in = os.Stdin
@@ -250,73 +308,36 @@ func doTest(ctx context.Context, c *control.Client, args []string) error {
 		in = f
 	}
 
-	type banEvent struct {
-		ip        netip.Addr
-		firstSeen time.Time
-		bannedAt  time.Time
-		expires   time.Time
-	}
-	firstSeenAt := make(map[netip.Addr]time.Time)
-	simulated := []banEvent{}
-	bannedSet := make(map[netip.Addr]struct{})
-	uniqueIPs := make(map[netip.Addr]struct{})
-	linesRead, linesMatched := 0, 0
-
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
+	linesRead, regexMatches := 0, 0
+	unique := make(map[string]struct{})
+	err = source.ReadBoundedLines(in, 16*1024, func(text string) bool {
 		linesRead++
-		ip, _, ok := m.Match(scanner.Text())
-		if !ok {
-			continue
+		if ip, _, ok := probe.Match(text); ok {
+			regexMatches++
+			unique[ip.String()] = struct{}{}
 		}
-		linesMatched++
-		uniqueIPs[ip] = struct{}{}
 		now := time.Now()
-		if _, seen := firstSeenAt[ip]; !seen {
-			firstSeenAt[ip] = now
-		}
-		if _, alreadyBanned := bannedSet[ip]; alreadyBanned {
-			continue
-		}
-		if tr.Hit(ip) {
-			bannedSet[ip] = struct{}{}
-			simulated = append(simulated, banEvent{
-				ip:        ip,
-				firstSeen: firstSeenAt[ip],
-				bannedAt:  now,
-				expires:   now.Add(target_rule.BanTime),
-			})
-			tr.Reset(ip)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan input: %w", err)
+		r.Process(ctx, source.LogLine{Text: text, Time: now, ReceivedAt: now})
+		return ctx.Err() == nil
+	})
+	if err != nil {
+		return fmt.Errorf("read input: %w", err)
 	}
 
-	// Summary
-	fmt.Printf("=== test results for rule %q against %s ===\n", *ruleName, target)
-	fmt.Printf("Lines read:        %d\n", linesRead)
-	fmt.Printf("Lines matched:     %d\n", linesMatched)
-	fmt.Printf("Unique IPs seen:   %d\n", len(uniqueIPs))
-	fmt.Printf("Simulated bans:    %d\n", len(simulated))
-	fmt.Println()
-	fmt.Printf("Rule settings: max_retries=%d, findtime=%s, bantime=%s\n",
-		target_rule.Threshold, target_rule.FindTime, target_rule.BanTime)
-	fmt.Println()
+	stats := r.Stats()
+	fmt.Printf("=== production-pipeline test for rule %q against %s ===\n", *ruleName, target)
+	fmt.Printf("Lines read:        %d\nRegex matches:     %d\nAccepted strikes:  %d\nUnique IPs seen:   %d\nDate drops:        %d\nSimulated bans:    %d\n\n",
+		linesRead, regexMatches, stats.Hits, len(unique), stats.DateDrops, len(simulated))
+	fmt.Printf("Rule settings: max_retries=%d, findtime=%s, bantime=%s, date_policy=%s\n\n",
+		info.Threshold, info.FindTime, info.BanTime, info.DateFailurePolicy)
 	if len(simulated) == 0 {
-		fmt.Println("(no IPs would be banned with these settings)")
+		fmt.Println("(no IPs would be banned with the effective daemon settings)")
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "IP\tFIRST_SEEN\tBANNED_AT\tEXPIRES")
-	for _, e := range simulated {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			e.ip.String(),
-			e.firstSeen.Format("15:04:05"),
-			e.bannedAt.Format("15:04:05"),
-			e.expires.Format(time.RFC3339),
-		)
+	fmt.Fprintln(w, "IP\tBANNED_AT\tEXPIRES")
+	for _, event := range simulated {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", event.ip, event.bannedAt.Format(time.RFC3339), event.expires.Format(time.RFC3339))
 	}
 	return w.Flush()
 }

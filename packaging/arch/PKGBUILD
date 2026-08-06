@@ -43,8 +43,9 @@ package() {
     install -Dm644 deploy/goban.service "${pkgdir}/usr/lib/systemd/system/goban.service"
     install -Dm644 deploy/goban-persist.service "${pkgdir}/usr/lib/systemd/system/goban-persist.service"
     install -Dm644 examples/goban.yaml "${pkgdir}/etc/goban/goban.yaml"
-    install -d "${pkgdir}/etc/goban/rules.d"
-    install -Dm644 examples/rules.d/*.yaml -t "${pkgdir}/etc/goban/rules.d/"
+    install -d "${pkgdir}/etc/goban/rules.d" "${pkgdir}/usr/share/goban/rules-available"
+    install -Dm644 examples/rules.d/*.yaml -t "${pkgdir}/usr/share/goban/rules-available/"
+    install -Dm644 examples/rules.d/{sshd,recidive}.yaml -t "${pkgdir}/etc/goban/rules.d/"
     install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
     install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
 }

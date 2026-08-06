@@ -24,6 +24,9 @@ func (n *NoopBanner) Setup(_ context.Context) error { return nil }
 
 // Ban records the ban in memory.
 func (n *NoopBanner) Ban(_ context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
+	if err := validateTTL(ttl); err != nil {
+		return err
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	now := time.Now()

@@ -30,11 +30,12 @@ type NFTablesCommander interface {
 // /banned listing can report which rule banned an IP. nftables itself
 // doesn't track that.
 type NFTables struct {
-	Table   string
-	SetV4   string
-	SetV6   string
-	Chain   string
-	UseIPv6 bool
+	Table        string
+	SetV4        string
+	SetV6        string
+	Chain        string
+	ForwardChain string
+	UseIPv6      bool
 
 	cli    NFTablesCommander
 	ownCli bool // we created cli ourselves and should Close it
@@ -48,12 +49,13 @@ type NFTables struct {
 // SetCommander aren't forced to root.
 func NewNFTables(table, setV4, setV6, chain string, useIPv6 bool) *NFTables {
 	return &NFTables{
-		Table:   table,
-		SetV4:   setV4,
-		SetV6:   setV6,
-		Chain:   chain,
-		UseIPv6: useIPv6,
-		ruleOf:  make(map[netip.Addr]string),
+		Table:        table,
+		SetV4:        setV4,
+		SetV6:        setV6,
+		Chain:        chain,
+		ForwardChain: "forward",
+		UseIPv6:      useIPv6,
+		ruleOf:       make(map[netip.Addr]string),
 	}
 }
 
@@ -62,6 +64,9 @@ func (b *NFTables) SetCommander(c NFTablesCommander) {
 	b.cli = c
 	b.ownCli = false
 }
+
+// SetForwardChain enables or disables enforcement on forwarded traffic.
+func (b *NFTables) SetForwardChain(name string) { b.ForwardChain = name }
 
 // Setup creates the table, sets, chain, and rules. Idempotent.
 func (b *NFTables) Setup(ctx context.Context) error {
@@ -74,11 +79,12 @@ func (b *NFTables) Setup(ctx context.Context) error {
 		b.ownCli = true
 	}
 	if err := b.cli.Setup(ctx, nftables.SetupConfig{
-		Table: b.Table,
-		SetV4: b.SetV4,
-		SetV6: b.SetV6,
-		Chain: b.Chain,
-		IPv6:  b.UseIPv6,
+		Table:        b.Table,
+		SetV4:        b.SetV4,
+		SetV6:        b.SetV6,
+		Chain:        b.Chain,
+		ForwardChain: b.ForwardChain,
+		IPv6:         b.UseIPv6,
 	}); err != nil {
 		return fmt.Errorf("nftables setup: %w", err)
 	}
@@ -88,6 +94,9 @@ func (b *NFTables) Setup(ctx context.Context) error {
 // Ban adds ip to the appropriate set with the per-element TTL.
 func (b *NFTables) Ban(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
 	if err := validateIP(ip); err != nil {
+		return err
+	}
+	if err := validateTTL(ttl); err != nil {
 		return err
 	}
 	setName, family, err := b.routeFamily(ip)

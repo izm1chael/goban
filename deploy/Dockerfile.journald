@@ -1,0 +1,24 @@
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends libsystemd-dev pkg-config && rm -rf /var/lib/apt/lists/*
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=1 go build -trimpath -tags=journald -ldflags="-s -w -X main.version=${VERSION}" -o /out/goban-daemon ./cmd/goban-daemon \
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/goban-client ./cmd/goban-client
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends iptables ipset nftables libsystemd0 ca-certificates tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system goban && useradd --system --gid goban --no-create-home --shell /usr/sbin/nologin goban \
+ && install -d -o root -g goban -m 0770 /run/goban /var/lib/goban /var/log/goban /etc/goban/rules.d
+COPY --from=builder /out/goban-daemon /usr/local/bin/goban-daemon
+COPY --from=builder /out/goban-client /usr/local/bin/goban-client
+COPY examples/goban.yaml /etc/goban/goban.yaml
+COPY examples/rules.d /usr/share/goban/rules-available
+RUN cp /usr/share/goban/rules-available/sshd.yaml /etc/goban/rules.d/ \
+ && cp /usr/share/goban/rules-available/recidive.yaml /etc/goban/rules.d/
+USER root
+ENTRYPOINT ["/usr/local/bin/goban-daemon"]
+CMD ["--config", "/etc/goban/goban.yaml"]

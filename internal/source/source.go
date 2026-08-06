@@ -1,88 +1,106 @@
-// Package source defines the LogLine type and the Source interface that file,
-// docker and journal backends implement. A simple Hub helper provides
-// fan-out so multiple jails can subscribe to the same source.
+// Package source defines the LogLine type and Source interface shared by file,
+// Docker, and journal backends. Hub provides bounded fan-out with observable
+// drop counters so overload can never remain invisible to operators.
 package source
 
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // LogLine is a single line of log output ready to be matched.
 type LogLine struct {
-	Source    string    // source name (e.g. "auth-log")
-	Container string    // populated by docker source
-	Unit      string    // populated by journal source
-	Text      string    // the raw line, trimmed of trailing newline
-	Time      time.Time // event time if available, else producer wall time
+	Source     string
+	Container  string
+	Unit       string
+	Text       string
+	Time       time.Time // source event time; rules use this as timestamp fallback
+	ReceivedAt time.Time // ingestion time used for lossless, duplicate-free reload cutover
 }
 
-// Source is the read side of a log stream. Subscribe returns a channel that
-// receives LogLine values until the Source is shut down via Close or its
-// internal context is cancelled.
+// Health is a point-in-time source health snapshot.
+type Health struct {
+	Name          string    `json:"name"`
+	Status        string    `json:"status"` // starting|running|degraded|stopped
+	StartedAt     time.Time `json:"started_at,omitempty"`
+	LastEventAt   time.Time `json:"last_event_at,omitempty"`
+	LastErrorAt   time.Time `json:"last_error_at,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+	Reconnects    uint64    `json:"reconnects"`
+	Subscribers   int       `json:"subscribers"`
+	Delivered     uint64    `json:"delivered"`
+	Dropped       uint64    `json:"dropped"`
+	MaxQueueDepth int       `json:"max_queue_depth"`
+}
+
+// Source is the read side of a log stream.
 type Source interface {
-	// Name returns the user-configured source name.
 	Name() string
-	// Start begins producing lines; safe to call once. ctx cancellation
-	// terminates the source.
 	Start(ctx context.Context) error
-	// Subscribe returns a receive-only channel of LogLine. Multiple
-	// subscribers each receive every line. Buffered to absorb spikes.
 	Subscribe(name string, bufSize int) <-chan LogLine
-	// Unsubscribe removes a named subscriber, closing its channel so the
-	// consuming goroutine's `range` over it terminates cleanly. Safe to
-	// call on an unknown name (no-op).
 	Unsubscribe(name string)
-	// Close releases resources.
+	Health() Health
 	Close() error
 }
 
-// Hub is a reusable fan-out helper for Source implementations.
+type subscriber struct {
+	ch chan LogLine
+}
+
+// HubStats are cumulative fan-out counters.
+type HubStats struct {
+	Subscribers   int
+	Delivered     uint64
+	Dropped       uint64
+	MaxQueueDepth int
+	Closed        bool
+}
+
+// Hub is a reusable, bounded fan-out helper.
 type Hub struct {
 	mu          sync.Mutex
-	subscribers map[string]chan LogLine
+	subscribers map[string]*subscriber
 	closed      bool
+	delivered   atomic.Uint64
+	dropped     atomic.Uint64
+	maxDepth    atomic.Int64
 }
 
-// NewHub returns an empty Hub.
-func NewHub() *Hub {
-	return &Hub{subscribers: make(map[string]chan LogLine)}
-}
+func NewHub() *Hub { return &Hub{subscribers: make(map[string]*subscriber)} }
 
-// Subscribe registers a named subscriber and returns its channel. If a
-// subscriber with the same name already exists the existing channel is
-// returned.
+// Subscribe returns a permanently closed channel when the hub has already
+// stopped. This prevents a post-close subscriber from hanging forever.
 func (h *Hub) Subscribe(name string, bufSize int) <-chan LogLine {
+	if bufSize < 0 {
+		bufSize = 0
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if ch, ok := h.subscribers[name]; ok {
-		return ch
+	if existing, ok := h.subscribers[name]; ok {
+		return existing.ch
 	}
 	ch := make(chan LogLine, bufSize)
-	h.subscribers[name] = ch
+	if h.closed {
+		close(ch)
+		return ch
+	}
+	h.subscribers[name] = &subscriber{ch: ch}
 	return ch
 }
 
-// Unsubscribe removes a named subscriber and closes its channel. Used by
-// daemon.Reload when a rule is removed from config — the rule's goroutine
-// sees the channel close (its `range in` loop terminates) and the source's
-// Broadcast no longer publishes to a dead consumer.
-//
-// Safe to call on an unknown name (no-op) and on an already-removed
-// subscriber (no double-close — we check membership before closing).
 func (h *Hub) Unsubscribe(name string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if ch, ok := h.subscribers[name]; ok {
+	if sub, ok := h.subscribers[name]; ok {
 		delete(h.subscribers, name)
-		close(ch)
+		close(sub.ch)
 	}
 }
 
-// Broadcast delivers line to every subscriber. If a subscriber's buffer is
-// full the line is dropped for that subscriber (logged by caller if desired).
-// Returns the number of subscribers that received the line.
+// Broadcast is deliberately non-blocking. Every dropped delivery is counted;
+// callers surface the aggregate through Source.Health and the control API.
 func (h *Hub) Broadcast(line LogLine) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -90,18 +108,28 @@ func (h *Hub) Broadcast(line LogLine) int {
 		return 0
 	}
 	delivered := 0
-	for _, ch := range h.subscribers {
+	for _, sub := range h.subscribers {
 		select {
-		case ch <- line:
+		case sub.ch <- line:
 			delivered++
+			h.delivered.Add(1)
+			depth := int64(len(sub.ch))
+			for {
+				old := h.maxDepth.Load()
+				if depth <= old || h.maxDepth.CompareAndSwap(old, depth) {
+					break
+				}
+			}
 		default:
-			// drop on full buffer; better than blocking the producer
+			h.dropped.Add(1)
 		}
 	}
 	return delivered
 }
 
-// Close closes all subscriber channels.
+// Close atomically detaches and closes every subscriber. Removing entries
+// before returning makes a later Unsubscribe a safe no-op rather than a
+// double-close panic.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -109,14 +137,112 @@ func (h *Hub) Close() {
 		return
 	}
 	h.closed = true
-	for _, ch := range h.subscribers {
-		close(ch)
+	for name, sub := range h.subscribers {
+		delete(h.subscribers, name)
+		close(sub.ch)
 	}
 }
 
-// SubscriberCount returns the number of currently-registered subscribers.
-func (h *Hub) SubscriberCount() int {
+func (h *Hub) Stats() HubStats {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return len(h.subscribers)
+	return HubStats{
+		Subscribers:   len(h.subscribers),
+		Delivered:     h.delivered.Load(),
+		Dropped:       h.dropped.Load(),
+		MaxQueueDepth: int(h.maxDepth.Load()),
+		Closed:        h.closed,
+	}
+}
+
+func (h *Hub) SubscriberCount() int { return h.Stats().Subscribers }
+
+// RuntimeHealth centralises source lifecycle bookkeeping.
+type RuntimeHealth struct {
+	mu          sync.Mutex
+	status      string
+	startedAt   time.Time
+	lastEventAt time.Time
+	lastErrorAt time.Time
+	lastError   string
+	reconnects  uint64
+}
+
+func (r *RuntimeHealth) Starting() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.status = "starting"
+	if r.startedAt.IsZero() {
+		r.startedAt = time.Now().UTC()
+	}
+}
+
+func (r *RuntimeHealth) Running() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.status = "running"
+	if r.startedAt.IsZero() {
+		r.startedAt = time.Now().UTC()
+	}
+	r.lastError = ""
+}
+
+func (r *RuntimeHealth) Event(at time.Time) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	r.mu.Lock()
+	r.lastEventAt = at.UTC()
+	if r.status != "stopped" {
+		r.status = "running"
+	}
+	r.mu.Unlock()
+}
+
+func (r *RuntimeHealth) Error(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.status = "degraded"
+	r.lastError = err.Error()
+	r.lastErrorAt = time.Now().UTC()
+	r.mu.Unlock()
+}
+
+func (r *RuntimeHealth) Reconnect() {
+	r.mu.Lock()
+	r.reconnects++
+	r.mu.Unlock()
+}
+
+func (r *RuntimeHealth) Stopped() {
+	r.mu.Lock()
+	r.status = "stopped"
+	r.mu.Unlock()
+}
+
+func (r *RuntimeHealth) Snapshot(name string, hub *Hub) Health {
+	r.mu.Lock()
+	h := Health{
+		Name:        name,
+		Status:      r.status,
+		StartedAt:   r.startedAt,
+		LastEventAt: r.lastEventAt,
+		LastErrorAt: r.lastErrorAt,
+		LastError:   r.lastError,
+		Reconnects:  r.reconnects,
+	}
+	r.mu.Unlock()
+	if h.Status == "" {
+		h.Status = "stopped"
+	}
+	if hub != nil {
+		hs := hub.Stats()
+		h.Subscribers = hs.Subscribers
+		h.Delivered = hs.Delivered
+		h.Dropped = hs.Dropped
+		h.MaxQueueDepth = hs.MaxQueueDepth
+	}
+	return h
 }

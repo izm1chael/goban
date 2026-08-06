@@ -83,3 +83,36 @@ func TestHub_BroadcastDropsOnFullBuffer(t *testing.T) {
 		t.Errorf("got %q, want 1", line.Text)
 	}
 }
+
+func TestHub_CloseThenUnsubscribeIsSafe(t *testing.T) {
+	h := NewHub()
+	ch := h.Subscribe("rule", 1)
+	h.Close()
+	h.Unsubscribe("rule")
+	if _, ok := <-ch; ok {
+		t.Fatal("channel should be closed")
+	}
+}
+
+func TestHub_SubscribeAfterCloseReturnsClosedChannel(t *testing.T) {
+	h := NewHub()
+	h.Close()
+	ch := h.Subscribe("late", 1)
+	if _, ok := <-ch; ok {
+		t.Fatal("late subscriber channel should be closed")
+	}
+}
+
+func TestHub_DropStatsAreObservable(t *testing.T) {
+	h := NewHub()
+	_ = h.Subscribe("slow", 1)
+	h.Broadcast(LogLine{Text: "one"})
+	h.Broadcast(LogLine{Text: "two"})
+	stats := h.Stats()
+	if stats.Delivered != 1 || stats.Dropped != 1 {
+		t.Fatalf("stats=%+v", stats)
+	}
+	if stats.MaxQueueDepth != 1 {
+		t.Fatalf("max depth=%d, want 1", stats.MaxQueueDepth)
+	}
+}

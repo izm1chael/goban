@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 type State interface {
 	Status() StatusResp
 	Rules() []RuleInfo
+	Sources() []SourceInfo
 	Banned(ctx context.Context) ([]BanInfo, error)
 	Unban(ctx context.Context, ip netip.Addr) error
 	BanManual(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error
@@ -31,11 +34,12 @@ type State interface {
 
 // Server is the unix-socket HTTP server.
 type Server struct {
-	state      State
-	socketPath string
-	socketMode os.FileMode
-	log        zerolog.Logger
-	audit      *Audit // optional; nil disables audit logging
+	state       State
+	socketPath  string
+	socketMode  os.FileMode
+	log         zerolog.Logger
+	audit       *Audit // optional; nil disables audit logging
+	socketGroup string
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -45,13 +49,18 @@ type Server struct {
 // New constructs a Server. The socket file is created on Start. audit may be
 // nil; when non-nil, successful /ban and /unban requests append a JSON line
 // to the audit log.
-func New(state State, socketPath string, socketMode os.FileMode, log zerolog.Logger, audit *Audit) *Server {
+func New(state State, socketPath string, socketMode os.FileMode, log zerolog.Logger, audit *Audit, socketGroup ...string) *Server {
+	group := ""
+	if len(socketGroup) > 0 {
+		group = socketGroup[0]
+	}
 	return &Server{
-		state:      state,
-		socketPath: socketPath,
-		socketMode: socketMode,
-		log:        log.With().Str("component", "control").Logger(),
-		audit:      audit,
+		state:       state,
+		socketPath:  socketPath,
+		socketMode:  socketMode,
+		log:         log.With().Str("component", "control").Logger(),
+		audit:       audit,
+		socketGroup: group,
 	}
 }
 
@@ -71,10 +80,30 @@ func (s *Server) Start(_ context.Context) error {
 		_ = l.Close()
 		return fmt.Errorf("chmod socket: %w", err)
 	}
+	if s.socketGroup != "" {
+		grp, err := user.LookupGroup(s.socketGroup)
+		if err != nil {
+			_ = l.Close()
+			_ = os.Remove(s.socketPath)
+			return fmt.Errorf("lookup socket group %q: %w", s.socketGroup, err)
+		}
+		gid, err := strconv.Atoi(grp.Gid)
+		if err != nil {
+			_ = l.Close()
+			_ = os.Remove(s.socketPath)
+			return fmt.Errorf("parse gid for socket group %q: %w", s.socketGroup, err)
+		}
+		if err := os.Chown(s.socketPath, -1, gid); err != nil {
+			_ = l.Close()
+			_ = os.Remove(s.socketPath)
+			return fmt.Errorf("chown socket group %q: %w", s.socketGroup, err)
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /rules", s.handleRules)
+	mux.HandleFunc("GET /sources", s.handleSources)
 	mux.HandleFunc("GET /banned", s.handleBanned)
 	mux.HandleFunc("POST /unban", s.handleUnban)
 	mux.HandleFunc("POST /ban", s.handleBan)
@@ -123,6 +152,10 @@ func (s *Server) handleRules(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.state.Rules())
 }
 
+func (s *Server) handleSources(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.state.Sources())
+}
+
 func (s *Server) handleBanned(w http.ResponseWriter, r *http.Request) {
 	bans, err := s.state.Banned(r.Context())
 	if err != nil {
@@ -147,7 +180,11 @@ func (s *Server) handleUnban(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.audit.Log(AuditEvent{Action: "unban", IP: addr.String(), Source: "manual"})
+	if s.audit != nil {
+		if err := s.audit.Log(AuditEvent{Action: "unban", IP: addr.String(), Source: "manual"}); err != nil {
+			s.log.Error().Err(err).Msg("unban applied but audit write failed")
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unbanned", "ip": addr.String()})
 }
 
@@ -166,15 +203,23 @@ func (s *Server) handleBan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("rule is required (use 'manual' to be explicit)"))
 		return
 	}
-	if req.TTL <= 0 {
-		writeError(w, http.StatusBadRequest, errors.New("ttl must be > 0"))
+	if req.TTL < time.Second {
+		writeError(w, http.StatusBadRequest, errors.New("ttl must be at least 1s"))
+		return
+	}
+	if req.TTL/time.Second > time.Duration(^uint32(0)) {
+		writeError(w, http.StatusBadRequest, errors.New("ttl exceeds kernel timeout maximum"))
 		return
 	}
 	if err := s.state.BanManual(r.Context(), addr, req.Rule, req.TTL); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.audit.Log(AuditEvent{Action: "ban", IP: addr.String(), Rule: req.Rule, TTL: req.TTL.String(), Source: "manual"})
+	if s.audit != nil {
+		if err := s.audit.Log(AuditEvent{Action: "ban", IP: addr.String(), Rule: req.Rule, TTL: req.TTL.String(), Source: "manual"}); err != nil {
+			s.log.Error().Err(err).Msg("manual ban applied but audit write failed")
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "banned", "ip": addr.String(), "rule": req.Rule})
 }
 

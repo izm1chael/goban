@@ -29,7 +29,7 @@ GoBan installed successfully.
 
 Next steps:
   1. Review and edit /etc/goban/goban.yaml for your environment
-  2. Drop rule bundles into /etc/goban/rules.d/ (or use the bundled ones)
+  2. Enable additional bundles by copying them from /usr/share/goban/rules-available/ into /etc/goban/rules.d/
   3. Enable and start the daemon:
        sudo systemctl enable --now goban
 

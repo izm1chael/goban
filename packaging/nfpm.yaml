@@ -13,10 +13,10 @@ section: net
 priority: optional
 maintainer: izm1chael <izm1chael@users.noreply.github.com>
 description: |
-  GoBan — fast fail2ban replacement.
+  GoBan — lightweight host intrusion prevention.
   Watches log files, Docker container logs, and the systemd journal; bans
-  offending IPs via direct netlink to the kernel ipset subsystem. Single
-  static Go binary; ~10-30x less CPU than fail2ban under load.
+  offending IPs through direct netlink using ipset or nftables. Includes
+  strict configuration validation, persisted state, and a Unix control API.
 vendor: izm1chael
 homepage: https://github.com/izm1chael/goban
 license: MIT
@@ -29,11 +29,11 @@ depends:
 # destinations on the user's system.
 contents:
   - src: ../bin/goban-daemon
-    dst: /usr/local/bin/goban-daemon
+    dst: /usr/bin/goban-daemon
     file_info:
       mode: 0755
   - src: ../bin/goban-client
-    dst: /usr/local/bin/goban-client
+    dst: /usr/bin/goban-client
     file_info:
       mode: 0755
   - src: ../deploy/goban.service
@@ -45,9 +45,19 @@ contents:
     type: config|noreplace
     file_info:
       mode: 0644
+  - dst: /etc/goban/rules.d
+    type: dir
+    file_info:
+      mode: 0755
   - src: ../examples/rules.d
-    dst: /etc/goban/rules.d
+    dst: /usr/share/goban/rules-available
     type: tree
+  - src: ../examples/rules.d/sshd.yaml
+    dst: /etc/goban/rules.d/sshd.yaml
+    type: config|noreplace
+  - src: ../examples/rules.d/recidive.yaml
+    dst: /etc/goban/rules.d/recidive.yaml
+    type: config|noreplace
   - src: ../README.md
     dst: /usr/share/doc/goban/README.md
     file_info:

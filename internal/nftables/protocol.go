@@ -96,7 +96,8 @@ const (
 
 // NF_INET_* — hook numbers.
 const (
-	hookInput uint8 = 1 // NF_INET_LOCAL_IN
+	hookInput   uint8 = 1 // NF_INET_LOCAL_IN
+	hookForward uint8 = 2 // NF_INET_FORWARD
 )
 
 // nftables priority constants. The kernel uses a signed int32; negative

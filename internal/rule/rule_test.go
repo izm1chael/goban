@@ -2,6 +2,8 @@ package rule
 
 import (
 	"context"
+	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -133,6 +135,7 @@ func TestRule_DatepatternUsesParsedTime(t *testing.T) {
 		SourceName:  "auth",
 		Pattern:     `^(?P<time>\S+) .* from (?P<ip>\S+) port`,
 		Datepattern: "iso8601",
+		Timezone:    "UTC",
 		MaxRetries:  3,
 		FindTime:    10 * time.Minute,
 		BanTime:     time.Hour,
@@ -156,67 +159,78 @@ func TestRule_DatepatternUsesParsedTime(t *testing.T) {
 	}
 }
 
-func TestRule_DatepatternDriftFallsBackToWallClock(t *testing.T) {
-	// Lines with timestamps 2 days old are well outside the drift window;
-	// the rule must fall back to wall-clock and increment the drift counter.
+func TestRule_DatepatternDriftDropsByDefault(t *testing.T) {
 	b := banner.NewNoop()
 	r, err := New(Config{
-		Name:        "sshd",
-		SourceName:  "auth",
-		Pattern:     `^(?P<time>\S+) .* from (?P<ip>\S+) port`,
-		Datepattern: "iso8601",
-		MaxRetries:  3,
-		FindTime:    10 * time.Minute,
-		BanTime:     time.Hour,
-		Banner:      b,
-		Logger:      zerolog.Nop(),
+		Name: "sshd", SourceName: "auth",
+		Pattern: `^(?P<time>\S+) .* from (?P<ip>\S+) port`, Datepattern: "iso8601",
+		MaxRetries: 1, FindTime: 10 * time.Minute, BanTime: time.Hour,
+		Banner: b, Logger: zerolog.Nop(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	old := time.Now().Add(-48 * time.Hour).UTC().Format("2006-01-02T15:04:05")
-	for i := 0; i < 3; i++ {
-		r.process(context.Background(), source.LogLine{
-			Text: old + " sshd[1]: Failed password for invalid user bob from 198.51.100.7 port 22 ssh2",
-		})
+	r.process(context.Background(), source.LogLine{Text: old + " sshd[1]: Failed password from 198.51.100.7 port 22"})
+	stats := r.Stats()
+	if stats.DateDriftFallbacks != 1 || stats.DateDrops != 1 {
+		t.Fatalf("stats=%+v", stats)
 	}
-	s := r.Stats()
-	if s.DateDriftFallbacks != 3 {
-		t.Errorf("DateDriftFallbacks = %d, want 3", s.DateDriftFallbacks)
-	}
-	// And the wall-clock fallback still produced a ban (three strikes all
-	// at "now" definitely trip a threshold of 3).
 	bans, _ := b.List(context.Background())
-	if len(bans) != 1 {
-		t.Errorf("len(bans) = %d, want 1 — fallback should still ban", len(bans))
+	if len(bans) != 0 {
+		t.Fatalf("stale event produced ban: %+v", bans)
 	}
 }
 
-func TestRule_DatepatternParseFailureCount(t *testing.T) {
-	// When the regex captures `time` but the captured string can't be parsed
-	// with the configured layout, the parse-fail counter increments and the
-	// rule falls back to wall-clock.
+func TestRule_DatepatternSourceTimeFallbackIsExplicit(t *testing.T) {
 	b := banner.NewNoop()
 	r, err := New(Config{
-		Name:        "sshd",
-		SourceName:  "auth",
-		Pattern:     `^(?P<time>\S+) .* from (?P<ip>\S+) port`,
-		Datepattern: "iso8601",
-		MaxRetries:  1,
-		FindTime:    time.Minute,
-		BanTime:     time.Hour,
-		Banner:      b,
-		Logger:      zerolog.Nop(),
+		Name: "sshd", SourceName: "auth",
+		Pattern: `^(?P<time>\S+) .* from (?P<ip>\S+) port`, Datepattern: "iso8601",
+		DateFailurePolicy: "source_time", MaxRetries: 1, FindTime: time.Minute, BanTime: time.Hour,
+		Banner: b, Logger: zerolog.Nop(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	r.process(context.Background(), source.LogLine{
-		Text: `notatime sshd[1]: Failed password for invalid user bob from 198.51.100.7 port 22 ssh2`,
+	now := time.Now()
+	r.process(context.Background(), source.LogLine{Text: "notatime sshd[1]: Failed password from 198.51.100.7 port 22", Time: now})
+	stats := r.Stats()
+	if stats.DateParseFails != 1 || stats.DateDrops != 0 {
+		t.Fatalf("stats=%+v", stats)
+	}
+	bans, _ := b.List(context.Background())
+	if len(bans) != 1 {
+		t.Fatalf("len(bans)=%d, want 1", len(bans))
+	}
+}
+
+func TestRule_DatepatternParseFailureDropsByDefault(t *testing.T) {
+	b := banner.NewNoop()
+	r, err := New(Config{
+		Name: "sshd", SourceName: "auth",
+		Pattern: `^(?P<time>\S+) .* from (?P<ip>\S+) port`, Datepattern: "iso8601",
+		MaxRetries: 1, FindTime: time.Minute, BanTime: time.Hour,
+		Banner: b, Logger: zerolog.Nop(),
 	})
-	s := r.Stats()
-	if s.DateParseFails != 1 {
-		t.Errorf("DateParseFails = %d, want 1", s.DateParseFails)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	r.process(context.Background(), source.LogLine{Text: `notatime sshd[1]: Failed password from 198.51.100.7 port 22`})
+	stats := r.Stats()
+	if stats.DateParseFails != 1 || stats.DateDrops != 1 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestParseEventTimeInjectsNearestSyslogYear(t *testing.T) {
+	reference := time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC)
+	got, err := parseEventTime("Jan _2 15:04:05", "Dec 31 23:59:30", reference, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Year() != 2025 || got.Month() != time.December {
+		t.Fatalf("got %s", got)
 	}
 }
 
@@ -302,5 +316,66 @@ func TestRule_RunDrainsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("Run did not return after context cancel")
+	}
+}
+
+type failingBanner struct{ err error }
+
+func (f failingBanner) Setup(context.Context) error                                  { return nil }
+func (f failingBanner) Ban(context.Context, netip.Addr, string, time.Duration) error { return f.err }
+func (f failingBanner) BanBatch(context.Context, []banner.BanRequest) error          { return f.err }
+func (f failingBanner) Unban(context.Context, netip.Addr) error                      { return nil }
+func (f failingBanner) List(context.Context) ([]banner.BanInfo, error)               { return nil, nil }
+func (f failingBanner) Close(context.Context, bool) error                            { return nil }
+
+func TestRule_FailedBanDoesNotResetOrEmitSuccess(t *testing.T) {
+	want := errors.New("kernel rejected ban")
+	emitted := 0
+	r, err := New(Config{
+		Name: "test", SourceName: "auth", Pattern: `from (?P<ip>\S+)`,
+		MaxRetries: 1, FindTime: time.Minute, BanTime: time.Hour,
+		Banner: failingBanner{err: want}, Logger: zerolog.Nop(), OnBan: func(BanEvent) { emitted++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.process(context.Background(), source.LogLine{Text: "failed from 198.51.100.8"})
+	if emitted != 0 {
+		t.Fatalf("emitted=%d, want 0", emitted)
+	}
+	if r.Stats().Bans != 0 {
+		t.Fatalf("bans=%d, want 0", r.Stats().Bans)
+	}
+	if r.Tracker().Snapshot()[netip.MustParseAddr("198.51.100.8")] != 1 {
+		t.Fatal("strike was reset after failed ban")
+	}
+}
+
+func TestRule_ForwardedClientRequiresTrustedProxy(t *testing.T) {
+	b := banner.NewNoop()
+	trusted, err := allowlist.New([]string{"10.0.0.0/8", "2001:db8::/32"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(Config{
+		Name: "proxy", SourceName: "access",
+		Pattern:             `peer=(?P<peer>\S+) client=(?P<ip>\S+) status=401`,
+		TrustedProxyCapture: "peer", TrustedProxies: trusted,
+		MaxRetries: 1, FindTime: time.Minute, BanTime: time.Hour,
+		Banner: b, Logger: zerolog.Nop(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	r.process(ctx, source.LogLine{Text: "peer=203.0.113.10 client=198.51.100.7 status=401"})
+	bans, _ := b.List(ctx)
+	if len(bans) != 0 {
+		t.Fatalf("untrusted proxy produced ban: %+v", bans)
+	}
+	r.process(ctx, source.LogLine{Text: "peer=10.1.2.3:443 client=198.51.100.7 status=401"})
+	bans, _ = b.List(ctx)
+	if len(bans) != 1 || bans[0].IP.String() != "198.51.100.7" {
+		t.Fatalf("trusted proxy bans=%+v", bans)
 	}
 }
