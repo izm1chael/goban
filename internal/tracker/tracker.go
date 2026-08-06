@@ -208,6 +208,34 @@ func (t *Tracker) Snapshot() map[netip.Addr]int {
 	return out
 }
 
+// Evidence returns the current in-window strike count and the first and last
+// event timestamps for addr. It is safe for concurrent use and is intended
+// for decision audit/explain output immediately before a successful ban resets
+// the tracker record.
+func (t *Tracker) Evidence(addr netip.Addr) (count int, first, last time.Time) {
+	cutoff := t.Now().Add(-t.findtime)
+	s := t.shardFor(addr)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[addr]
+	if !ok {
+		return 0, time.Time{}, time.Time{}
+	}
+	for _, ts := range r.strikes {
+		if !ts.After(cutoff) {
+			continue
+		}
+		count++
+		if first.IsZero() || ts.Before(first) {
+			first = ts
+		}
+		if last.IsZero() || ts.After(last) {
+			last = ts
+		}
+	}
+	return count, first, last
+}
+
 // Threshold returns the configured threshold.
 func (t *Tracker) Threshold() int { return t.threshold }
 

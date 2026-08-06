@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/izm1chael/goban/internal/allowlist"
 	"github.com/izm1chael/goban/internal/banner"
+	"github.com/izm1chael/goban/internal/config"
 	"github.com/izm1chael/goban/internal/control"
 	"github.com/izm1chael/goban/internal/matcher"
 	"github.com/izm1chael/goban/internal/rule"
@@ -34,12 +36,16 @@ Usage:
 
 Commands:
   status                       show daemon status
+  doctor [--probe]             verify live protection and optional kernel write path
   rules                        list rules with hit/ban counters
   sources                      show live source health and queue drops
   list                         list currently-banned IPs
+  explain <ip|decision-id>     explain an active decision and its evidence
   unban <ip>                   remove a ban
-  ban <ip> --rule manual [--ttl 1h]   manually ban an IP (rule label required)
-  test --rule NAME <file|->    dry-run a rule against a log file (or stdin)
+  ban <ip> --rule manual [--ttl 1h]   manually ban an IP (flags may appear before or after IP)
+  rule test --rule NAME <file|->      simulate the production rule pipeline
+  config validate [flags]      validate the exact effective startup config
+  config show-effective [flags]       print the resolved effective config
   reload                       reload config from disk (validate-then-swap)
   version                      print client version
 
@@ -80,18 +86,29 @@ func run() error {
 	switch cmd {
 	case "status":
 		return doStatus(ctx, c, asJSON)
+	case "doctor":
+		return doDoctor(ctx, c, rest, asJSON)
 	case "rules":
 		return doRules(ctx, c, asJSON)
 	case "sources":
 		return doSources(ctx, c, asJSON)
 	case "list", "banned":
 		return doList(ctx, c, asJSON)
+	case "explain":
+		return doExplain(ctx, c, rest, asJSON)
 	case "unban":
 		return doUnban(ctx, c, rest)
 	case "ban":
 		return doBan(ctx, c, rest)
 	case "test":
-		return doTest(ctx, c, rest)
+		return doTest(ctx, c, rest) // compatibility alias
+	case "rule":
+		if len(rest) == 0 || rest[0] != "test" {
+			return fmt.Errorf("usage: goban-client rule test --rule NAME [--config PATH] [--rules-dir DIR] <logfile|->")
+		}
+		return doTest(ctx, c, rest[1:])
+	case "config":
+		return doConfig(rest, asJSON)
 	case "reload":
 		return doReload(ctx, c)
 	case "version":
@@ -124,6 +141,151 @@ func doStatus(ctx context.Context, c *control.Client, asJSON bool) error {
 	fmt.Printf("rules:      %d\n", st.NumRules)
 	fmt.Printf("total bans: %d\n", st.TotalBans)
 	return nil
+}
+
+func doDoctor(ctx context.Context, c *control.Client, args []string, asJSON bool) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	probe := fs.Bool("probe", false, "perform a temporary kernel insert/list/remove probe")
+	probeIP := fs.String("probe-ip", "", "non-production address to use for --probe")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: goban-client doctor [--probe] [--probe-ip 192.0.2.254]")
+	}
+	result, err := c.Doctor(ctx, control.DoctorReq{Probe: *probe, ProbeIP: *probeIP})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return printJSON(result)
+	}
+	fmt.Printf("GoBan protection: %s\nChecked: %s\n\n", strings.ToUpper(strings.ReplaceAll(result.Overall, "_", " ")), result.CheckedAt.Format(time.RFC3339))
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "STATUS\tCHECK\tDETAIL")
+	for _, check := range result.Checks {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", strings.ToUpper(check.Status), check.Name, check.Detail)
+		if check.Remediation != "" {
+			fmt.Fprintf(w, "\t↳ action\t%s\n", check.Remediation)
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if result.Overall == "not_enforcing" {
+		return fmt.Errorf("host is not fully enforcing protection")
+	}
+	return nil
+}
+
+func doExplain(ctx context.Context, c *control.Client, args []string, asJSON bool) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: goban-client explain <ip|decision-id>")
+	}
+	needle := args[0]
+	bans, err := c.Banned(ctx)
+	if err != nil {
+		return err
+	}
+	var found *control.BanInfo
+	for i := range bans {
+		if bans[i].IP == needle || bans[i].DecisionID == needle {
+			found = &bans[i]
+			break
+		}
+	}
+	if found == nil {
+		if _, err := netip.ParseAddr(needle); err == nil {
+			return fmt.Errorf("%s is not currently banned", needle)
+		}
+		return fmt.Errorf("decision %q was not found among active bans", needle)
+	}
+	if asJSON {
+		return printJSON(found)
+	}
+	fmt.Printf("Decision:    %s\n", valueOr(found.DecisionID, "legacy/unattributed"))
+	fmt.Printf("Subject:     %s\n", found.IP)
+	fmt.Printf("Rule:        %s\n", valueOr(found.Rule, "unknown"))
+	fmt.Printf("Source:      %s\n", valueOr(found.Source, "unknown"))
+	fmt.Printf("Origin:      %s\n", valueOr(found.Origin, "unknown"))
+	if !found.BannedAt.IsZero() {
+		fmt.Printf("Applied:     %s\n", found.BannedAt.Format(time.RFC3339))
+	}
+	fmt.Printf("Remaining:   %s\n", found.TTL)
+	if !found.ExpiresAt.IsZero() {
+		fmt.Printf("Expires:     %s\n", found.ExpiresAt.Format(time.RFC3339))
+	}
+	if found.EvidenceCount > 0 {
+		fmt.Printf("Evidence:    %d accepted strikes\n", found.EvidenceCount)
+		fmt.Printf("Window:      %s → %s\n", found.FirstSeen.Format(time.RFC3339), found.LastSeen.Format(time.RFC3339))
+	} else if found.Origin == "manual" {
+		fmt.Println("Evidence:    manual operator decision")
+	} else {
+		fmt.Println("Evidence:    unavailable (legacy decision metadata)")
+	}
+
+	rules, err := c.Rules(ctx)
+	if err == nil {
+		for _, r := range rules {
+			if r.Name == found.Rule {
+				fmt.Printf("Threshold:   %d accepted strikes within %s\n", r.Threshold, r.FindTime)
+				fmt.Printf("Ban policy:  %s\n", r.BanTime)
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func valueOr(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func doConfig(args []string, asJSON bool) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: goban-client config <validate|show-effective> [--config PATH] [--rules-dir DIR]")
+	}
+	action, rest := args[0], args[1:]
+	fs := flag.NewFlagSet("config "+action, flag.ContinueOnError)
+	path := fs.String("config", "/etc/goban/goban.yaml", "main configuration file")
+	rulesDir := fs.String("rules-dir", "", "override rules directory")
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	cfg, err := config.LoadEffective(*path, *rulesDir)
+	if err != nil {
+		return fmt.Errorf("effective configuration is invalid: %w", err)
+	}
+	switch action {
+	case "validate":
+		if asJSON {
+			return printJSON(map[string]any{"valid": true, "config": *path, "sources": len(cfg.Sources), "rules": len(cfg.Rules), "backend": cfg.Banner.Backend})
+		}
+		backend := cfg.Banner.Backend
+		if backend == "" {
+			backend = "iptables"
+		}
+		fmt.Printf("valid: %s\nsources: %d\nrules: %d\nbackend: %s\n", *path, len(cfg.Sources), len(cfg.Rules), backend)
+		return nil
+	case "show-effective":
+		if asJSON {
+			return printJSON(cfg)
+		}
+		data, err := config.EffectiveYAML(cfg)
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(data)
+		return err
+	default:
+		return fmt.Errorf("unknown config command %q", action)
+	}
 }
 
 func doRules(ctx context.Context, c *control.Client, asJSON bool) error {
@@ -179,13 +341,13 @@ func doList(ctx context.Context, c *control.Client, asJSON bool) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "IP\tRULE\tTTL\tEXPIRES")
+	fmt.Fprintln(w, "IP\tRULE\tDECISION\tTTL\tEXPIRES")
 	for _, b := range bans {
 		exp := "permanent"
 		if !b.ExpiresAt.IsZero() {
 			exp = b.ExpiresAt.Format(time.RFC3339)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.IP, b.Rule, b.TTL, exp)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", b.IP, b.Rule, valueOr(b.DecisionID, "legacy"), b.TTL, exp)
 	}
 	return w.Flush()
 }
@@ -202,24 +364,59 @@ func doUnban(ctx context.Context, c *control.Client, args []string) error {
 }
 
 func doBan(ctx context.Context, c *control.Client, args []string) error {
-	fs := flag.NewFlagSet("ban", flag.ContinueOnError)
-	rule := fs.String("rule", "", "rule label (required; use 'manual' to be explicit)")
-	ttl := fs.Duration("ttl", time.Hour, "ban duration")
-	if err := fs.Parse(args); err != nil {
+	ip, ruleName, ttl, err := parseBanArgs(args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: goban-client ban <ip> --rule manual [--ttl 1h]")
-	}
-	if *rule == "" {
-		return fmt.Errorf("--rule is required (use 'manual' to be explicit and avoid lockouts)")
-	}
-	ip := fs.Arg(0)
-	if err := c.Ban(ctx, ip, *rule, *ttl); err != nil {
+	if err := c.Ban(ctx, ip, ruleName, ttl); err != nil {
 		return err
 	}
-	fmt.Printf("banned %s for %s (rule=%s)\n", ip, *ttl, *rule)
+	fmt.Printf("banned %s for %s (rule=%s)\n", ip, ttl, ruleName)
 	return nil
+}
+
+func parseBanArgs(args []string) (string, string, time.Duration, error) {
+	ruleName := ""
+	ttlRaw := time.Hour.String()
+	positional := make([]string, 0, 1)
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--rule":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return "", "", 0, fmt.Errorf("--rule requires a value")
+			}
+			i++
+			ruleName = args[i]
+		case strings.HasPrefix(a, "--rule="):
+			ruleName = strings.TrimPrefix(a, "--rule=")
+		case a == "--ttl":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return "", "", 0, fmt.Errorf("--ttl requires a duration")
+			}
+			i++
+			ttlRaw = args[i]
+		case strings.HasPrefix(a, "--ttl="):
+			ttlRaw = strings.TrimPrefix(a, "--ttl=")
+		case strings.HasPrefix(a, "-"):
+			return "", "", 0, fmt.Errorf("unknown ban flag %q", a)
+		default:
+			positional = append(positional, a)
+		}
+	}
+
+	if len(positional) != 1 {
+		return "", "", 0, fmt.Errorf("usage: goban-client ban <ip> --rule manual [--ttl 1h]")
+	}
+	if ruleName == "" {
+		return "", "", 0, fmt.Errorf("--rule is required (use 'manual' to be explicit and avoid lockouts)")
+	}
+	ttl, err := time.ParseDuration(ttlRaw)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("invalid --ttl %q: %w", ttlRaw, err)
+	}
+	return positional[0], ruleName, ttl, nil
 }
 
 func doReload(ctx context.Context, c *control.Client) error {
@@ -232,31 +429,23 @@ func doReload(ctx context.Context, c *control.Client) error {
 
 func doTest(ctx context.Context, c *control.Client, args []string) error {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	ruleName := fs.String("rule", "", "name of a rule already loaded by the daemon")
+	ruleName := fs.String("rule", "", "rule name")
+	configPath := fs.String("config", "", "load the rule from this config instead of a running daemon")
+	rulesDir := fs.String("rules-dir", "", "override rules directory when --config is used")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *ruleName == "" || fs.NArg() != 1 {
-		return fmt.Errorf("usage: goban-client test --rule NAME <logfile|->")
+		return fmt.Errorf("usage: goban-client rule test --rule NAME [--config PATH] [--rules-dir DIR] <logfile|->")
+	}
+	if *configPath == "" && *rulesDir != "" {
+		return fmt.Errorf("--rules-dir requires --config")
 	}
 	target := fs.Arg(0)
 
-	rules, err := c.Rules(ctx)
+	info, err := effectiveRuleForTest(ctx, c, *ruleName, *configPath, *rulesDir)
 	if err != nil {
-		return fmt.Errorf("fetch /rules: %w", err)
-	}
-	var info *control.RuleInfo
-	for i := range rules {
-		if rules[i].Name == *ruleName {
-			info = &rules[i]
-			break
-		}
-	}
-	if info == nil {
-		return fmt.Errorf("rule %q not loaded by the daemon", *ruleName)
-	}
-	if info.Regex == "" {
-		return fmt.Errorf("daemon did not return the effective rule configuration")
+		return err
 	}
 
 	global, err := allowlist.New(info.GlobalAllowlist)
@@ -340,6 +529,41 @@ func doTest(ctx context.Context, c *control.Client, args []string) error {
 		fmt.Fprintf(w, "%s\t%s\t%s\n", event.ip, event.bannedAt.Format(time.RFC3339), event.expires.Format(time.RFC3339))
 	}
 	return w.Flush()
+}
+
+func effectiveRuleForTest(ctx context.Context, c *control.Client, name, configPath, rulesDir string) (*control.RuleInfo, error) {
+	if configPath == "" {
+		rules, err := c.Rules(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("fetch /rules: %w (use --config for an offline test)", err)
+		}
+		for i := range rules {
+			if rules[i].Name == name {
+				if rules[i].Regex == "" {
+					return nil, fmt.Errorf("daemon did not return the effective rule configuration")
+				}
+				return &rules[i], nil
+			}
+		}
+		return nil, fmt.Errorf("rule %q is not loaded by the daemon", name)
+	}
+
+	cfg, err := config.LoadEffective(configPath, rulesDir)
+	if err != nil {
+		return nil, fmt.Errorf("load effective configuration: %w", err)
+	}
+	for _, rc := range cfg.Rules {
+		if rc.Name != name {
+			continue
+		}
+		return &control.RuleInfo{
+			Name: rc.Name, Source: rc.Source, Regex: rc.Regex, Threshold: rc.MaxRetries,
+			FindTime: rc.FindTime, BanTime: rc.BanTime, Datepattern: rc.Datepattern, Timezone: rc.Timezone,
+			DateFailurePolicy: rc.DateFailurePolicy, Excludes: rc.Excludes, Allowlist: rc.Allowlist,
+			GlobalAllowlist: cfg.Allowlist, TrustedProxyCapture: rc.TrustedProxyCapture, TrustedProxies: rc.TrustedProxies,
+		}, nil
+	}
+	return nil, fmt.Errorf("rule %q is not present in the effective configuration", name)
 }
 
 func printJSON(v any) error {

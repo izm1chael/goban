@@ -9,7 +9,7 @@ VERSION ?= 1.0.0
 ARCH    ?= amd64
 export ARCH
 
-.PHONY: all build build-journald test test-race vet lint docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
+.PHONY: all build build-journald test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
 
 all: build
 
@@ -34,6 +34,29 @@ vet:
 
 lint:
 	golangci-lint run
+
+# Non-privileged release gate. Kernel and package verification remain separate
+# because they need root/network namespaces and container/package tooling.
+verify-release: vet test-race
+	@test -z "$$(gofmt -l cmd internal benchmark)" || { echo "gofmt required:"; gofmt -l cmd internal benchmark; exit 1; }
+	bash -n test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/reload/run.sh test/integration/package/run.sh test/fault/run.sh
+	go test -run TestCoreRuleFixtures ./internal/config
+
+# Extended lifecycle/fault repetition.
+test-fault: build
+	test/fault/run.sh
+
+# End-to-end, unprivileged transactional reload stress.
+test-reload: build
+	test/integration/reload/run.sh
+
+# Representative privileged kernel paths; run as root on a disposable VM.
+test-kernel: build
+	test/integration/kernel/run.sh iptables input 4
+	test/integration/kernel/run.sh nftables forward 4
+
+package-smoke:
+	test/integration/package/run.sh
 
 docker-build:
 	docker build -f deploy/Dockerfile -t goban:latest .

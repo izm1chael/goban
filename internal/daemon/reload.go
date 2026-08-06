@@ -7,11 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -25,14 +22,18 @@ import (
 // At cutover, both bounded queues are reconciled as multisets: every event
 // buffered by the old graph is processed once, and equivalent events already
 // present in the candidate queues are discarded only when they were received
-// before the old producers stopped. This closes both sides of the hand-off:
-// events cannot fall into a seek/start gap, and overlap cannot double-count.
+// before the corresponding old source stopped. This closes both sides of the
+// hand-off: events cannot fall into a seek/start gap, and overlap cannot
+// double-count.
 //
 // If any candidate source fails to start, already-started candidates are
-// closed and the old rule consumers are relaunched against their still-live
-// sources. The active config and graph remain unchanged.
-func (d *Daemon) Reload(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
+// closed while the old graph keeps consuming throughout. The active config,
+// consumers, and sources therefore remain unchanged.
+func (d *Daemon) Reload(requestCtx context.Context) error {
+	// A control-client disconnect must not cancel a cutover after it has begun.
+	// The daemon lifecycle context remains authoritative; requestCtx is used only
+	// to reject a request that was already cancelled before work started.
+	if err := requestCtx.Err(); err != nil {
 		return err
 	}
 	d.reloadMu.Lock()
@@ -42,14 +43,17 @@ func (d *Daemon) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload load: %w", err)
 	}
+	applyRuntimeOverrides(newCfg, d.runtimeOverrides)
 	if err := newCfg.Validate(); err != nil {
 		return fmt.Errorf("reload validate: %w", err)
 	}
 	if err := assertImmutableFieldsUnchanged(d.cfg, newCfg); err != nil {
 		return fmt.Errorf("reload refused: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	if d.rootCtx != nil {
+		if err := d.rootCtx.Err(); err != nil {
+			return err
+		}
 	}
 
 	candidateAllowlist, err := buildAllowlist(newCfg.Allowlist)
@@ -125,6 +129,9 @@ func (d *Daemon) Reload(ctx context.Context) error {
 		}
 		started = append(started, name)
 	}
+	if err := drainReloadSources(d.rootCtx, oldSources); err != nil {
+		d.log.Warn().Err(err).Msg("source drain incomplete before reload cutover")
+	}
 
 	// Candidate startup succeeded. Pause the old consumers only now, after
 	// every candidate source is receiving. A slow candidate startup therefore
@@ -149,10 +156,11 @@ func (d *Daemon) Reload(ctx context.Context) error {
 	// Stop old producers, then drain their now-closed subscriber queues. The
 	// dedupe multiset includes both lines processed by the live old consumers
 	// during candidate startup and lines transferred from the old queues.
-	for _, si := range oldSources {
+	oldClosedAt := make(map[string]time.Time, len(oldSources))
+	for name, si := range oldSources {
 		_ = si.src.Close()
+		oldClosedAt[name] = time.Now()
 	}
-	oldClosedAt := time.Now()
 	oldCounts := make(map[string]map[string]int, len(oldRules))
 	for name, oldRI := range oldRules {
 		counts := oldRI.endCutoverRecording()
@@ -173,7 +181,7 @@ func (d *Daemon) Reload(ctx context.Context) error {
 	// most the matching number of events already consumed from the old queue.
 	for name, newRI := range candidateRules {
 		counts := oldCounts[name]
-		drainCandidateQueue(newRI, oldClosedAt, counts, d.rootCtx)
+		drainCandidateQueue(newRI, oldClosedAt[newRI.sourceName], counts, d.rootCtx)
 	}
 
 	d.cfg = newCfg
@@ -189,6 +197,25 @@ func (d *Daemon) Reload(ctx context.Context) error {
 		Int("rules", len(candidateRules)).
 		Int("sources", len(candidateSources)).
 		Msg("config reloaded with transactional source cutover")
+	return nil
+}
+
+type reloadDrainable interface {
+	Drain(context.Context) error
+}
+
+func drainReloadSources(parent context.Context, sources map[string]*sourceInstance) error {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	for name, si := range sources {
+		drainable, ok := si.src.(reloadDrainable)
+		if !ok {
+			continue
+		}
+		if err := drainable.Drain(ctx); err != nil {
+			return fmt.Errorf("drain source %q: %w", name, err)
+		}
+	}
 	return nil
 }
 
@@ -318,49 +345,15 @@ func ruleSig(rc config.RuleConfig) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func loadFreshConfig(cfgPath, rulesDir string) (*config.Config, error) {
-	cfg, err := config.LoadConfigFromFile(cfgPath)
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+func applyRuntimeOverrides(cfg *config.Config, overrides RuntimeOverrides) {
+	if overrides.LogLevel != "" {
+		cfg.LogLevel = overrides.LogLevel
 	}
-	if err := config.ApplyEnvOverrides(cfg); err != nil {
-		return nil, fmt.Errorf("env overrides: %w", err)
+	if overrides.LogFile != "" {
+		cfg.LogFile = overrides.LogFile
 	}
-	dir := rulesDir
-	if dir == "" {
-		dir = cfg.RulesDir
-	}
-	if dir != "" {
-		extra, err := loadFreshRulesDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("load rules dir %s: %w", dir, err)
-		}
-		cfg.Rules = append(cfg.Rules, extra...)
-	}
-	cfg.ApplyRuleDefaults()
-	return cfg, nil
 }
 
-func loadFreshRulesDir(dir string) ([]config.RuleConfig, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []config.RuleConfig
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".yaml" && ext != ".yml" {
-			continue
-		}
-		rules, err := config.LoadRulesFile(filepath.Join(dir, name))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
-		out = append(out, rules...)
-	}
-	return out, nil
+func loadFreshConfig(cfgPath, rulesDir string) (*config.Config, error) {
+	return config.LoadEffective(cfgPath, rulesDir)
 }

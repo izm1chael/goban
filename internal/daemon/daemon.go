@@ -44,13 +44,21 @@ type sourceInstance struct {
 	refcount int
 }
 
+// RuntimeOverrides are process-lifetime CLI settings that remain authoritative
+// across config reloads. They are not serialized into YAML.
+type RuntimeOverrides struct {
+	LogLevel string
+	LogFile  string
+}
+
 type Daemon struct {
 	cfg     *config.Config
 	log     zerolog.Logger
 	version string
 
-	cfgPath  string
-	rulesDir string
+	cfgPath          string
+	rulesDir         string
+	runtimeOverrides RuntimeOverrides
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -74,7 +82,11 @@ type Daemon struct {
 	auditCloser   func() error
 }
 
-func New(cfg *config.Config, log zerolog.Logger, version, cfgPath, rulesDir string) (*Daemon, error) {
+func New(cfg *config.Config, log zerolog.Logger, version, cfgPath, rulesDir string, overrides ...RuntimeOverrides) (*Daemon, error) {
+	runtimeOverrides := RuntimeOverrides{}
+	if len(overrides) > 0 {
+		runtimeOverrides = overrides[0]
+	}
 	al, err := buildAllowlist(cfg.Allowlist)
 	if err != nil {
 		return nil, fmt.Errorf("allowlist: %w", err)
@@ -100,18 +112,19 @@ func New(cfg *config.Config, log zerolog.Logger, version, cfgPath, rulesDir stri
 	}
 
 	d := &Daemon{
-		cfg:           cfg,
-		log:           log,
-		version:       version,
-		cfgPath:       cfgPath,
-		rulesDir:      rulesDir,
-		allowlist:     al,
-		banner:        b,
-		banMeta:       newBanMetadataStore(),
-		banMetaPath:   banMetadataPathFor(cfg.StatePath),
-		rules:         make(map[string]*ruleInstance),
-		sources:       make(map[string]*sourceInstance),
-		sweepInterval: time.Minute,
+		cfg:              cfg,
+		log:              log,
+		version:          version,
+		cfgPath:          cfgPath,
+		rulesDir:         rulesDir,
+		runtimeOverrides: runtimeOverrides,
+		allowlist:        al,
+		banner:           b,
+		banMeta:          newBanMetadataStore(),
+		banMetaPath:      banMetadataPathFor(cfg.StatePath),
+		rules:            make(map[string]*ruleInstance),
+		sources:          make(map[string]*sourceInstance),
+		sweepInterval:    time.Minute,
 	}
 
 	if cfg.AuditLog != "" {
@@ -142,9 +155,9 @@ func New(cfg *config.Config, log zerolog.Logger, version, cfgPath, rulesDir stri
 		d.rules[rc.Name] = ri
 	}
 
-	// The daemon owns auditing so manual and automatic bans share one event
-	// pipeline. The control server receives nil to avoid duplicate records.
-	d.control = control.New(d, cfg.SocketPath, os.FileMode(cfg.SocketMode), log, nil, cfg.SocketGroup)
+	// The daemon owns auditing so manual and automatic bans share one
+	// authoritative event pipeline; the control transport only delegates.
+	d.control = control.New(d, cfg.SocketPath, os.FileMode(cfg.SocketMode), log, cfg.SocketGroup)
 	return d, nil
 }
 
@@ -606,10 +619,10 @@ func (d *Daemon) Banned(ctx context.Context) ([]control.BanInfo, error) {
 	}
 	out := make([]control.BanInfo, 0, len(bans))
 	for _, b := range bans {
-		ruleName, src, bannedAt := d.overlayBanMetadata(b.IP, b.Rule)
+		meta := d.overlayBanMetadata(b.IP, b.Rule)
 		out = append(out, control.BanInfo{
-			IP: b.IP.String(), Rule: ruleName, Source: src, BannedAt: bannedAt,
-			TTL: b.TTL, ExpiresAt: b.ExpiresAt,
+			DecisionID: meta.DecisionID, IP: b.IP.String(), Rule: meta.Rule, Source: meta.Source, Origin: meta.Origin, BannedAt: meta.BannedAt,
+			TTL: b.TTL, ExpiresAt: b.ExpiresAt, EvidenceCount: meta.EvidenceCount, FirstSeen: meta.FirstSeen, LastSeen: meta.LastSeen,
 		})
 	}
 	return out, nil
@@ -627,6 +640,6 @@ func (d *Daemon) BanManual(ctx context.Context, ip netip.Addr, ruleName string, 
 	if err := d.banner.Ban(ctx, ip, ruleName, ttl); err != nil {
 		return err
 	}
-	d.recordBan(banMetadata{IP: ip.String(), Rule: ruleName, Source: "manual", Origin: "manual", BannedAt: time.Now().UTC(), TTL: ttl.String()})
+	d.recordBan(banMetadata{DecisionID: newDecisionID(), IP: ip.String(), Rule: ruleName, Source: "manual", Origin: "manual", BannedAt: time.Now().UTC(), TTL: ttl.String()})
 	return nil
 }

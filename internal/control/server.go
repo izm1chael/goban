@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -26,6 +27,7 @@ type State interface {
 	Banned(ctx context.Context) ([]BanInfo, error)
 	Unban(ctx context.Context, ip netip.Addr) error
 	BanManual(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error
+	Doctor(ctx context.Context, req DoctorReq) DoctorResp
 	// Reload re-reads config from disk and applies the diff atomically.
 	// On any failure the running daemon is unchanged and the error is
 	// returned for the operator to see.
@@ -38,7 +40,6 @@ type Server struct {
 	socketPath  string
 	socketMode  os.FileMode
 	log         zerolog.Logger
-	audit       *Audit // optional; nil disables audit logging
 	socketGroup string
 
 	mu       sync.Mutex
@@ -46,10 +47,10 @@ type Server struct {
 	server   *http.Server
 }
 
-// New constructs a Server. The socket file is created on Start. audit may be
-// nil; when non-nil, successful /ban and /unban requests append a JSON line
-// to the audit log.
-func New(state State, socketPath string, socketMode os.FileMode, log zerolog.Logger, audit *Audit, socketGroup ...string) *Server {
+// New constructs a Server. The socket file is created on Start. Successful
+// state changes are audited by the daemon decision pipeline, not by the HTTP
+// transport, so every automatic and manual action has one authoritative record.
+func New(state State, socketPath string, socketMode os.FileMode, log zerolog.Logger, socketGroup ...string) *Server {
 	group := ""
 	if len(socketGroup) > 0 {
 		group = socketGroup[0]
@@ -59,7 +60,6 @@ func New(state State, socketPath string, socketMode os.FileMode, log zerolog.Log
 		socketPath:  socketPath,
 		socketMode:  socketMode,
 		log:         log.With().Str("component", "control").Logger(),
-		audit:       audit,
 		socketGroup: group,
 	}
 }
@@ -107,6 +107,7 @@ func (s *Server) Start(_ context.Context) error {
 	mux.HandleFunc("GET /banned", s.handleBanned)
 	mux.HandleFunc("POST /unban", s.handleUnban)
 	mux.HandleFunc("POST /ban", s.handleBan)
+	mux.HandleFunc("POST /doctor", s.handleDoctor)
 	mux.HandleFunc("POST /reload", s.handleReload)
 
 	s.mu.Lock()
@@ -180,11 +181,6 @@ func (s *Server) handleUnban(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.audit != nil {
-		if err := s.audit.Log(AuditEvent{Action: "unban", IP: addr.String(), Source: "manual"}); err != nil {
-			s.log.Error().Err(err).Msg("unban applied but audit write failed")
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "unbanned", "ip": addr.String()})
 }
 
@@ -215,12 +211,19 @@ func (s *Server) handleBan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.audit != nil {
-		if err := s.audit.Log(AuditEvent{Action: "ban", IP: addr.String(), Rule: req.Rule, TTL: req.TTL.String(), Source: "manual"}); err != nil {
-			s.log.Error().Err(err).Msg("manual ban applied but audit write failed")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "banned", "ip": addr.String(), "rule": req.Rule})
+}
+
+func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
+	var req DoctorReq
+	if r.Body != nil {
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err))
+			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "banned", "ip": addr.String(), "rule": req.Rule})
+	writeJSON(w, http.StatusOK, s.state.Doctor(r.Context(), req))
 }
 
 func (s *Server) handleReload(w http.ResponseWriter, r *http.Request) {

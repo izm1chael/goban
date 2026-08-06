@@ -136,3 +136,61 @@ func TestFileSource_MissingAtStartReadsNewFile(t *testing.T) {
 		t.Fatal("timed out waiting for newly-created file")
 	}
 }
+
+func TestFileSource_RecoversAfterCopyTruncate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{Name: "test", Path: path})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ch := s.Subscribe("rule", 8)
+	time.Sleep(250 * time.Millisecond)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("before truncate\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	select {
+	case line := <-ch:
+		if line.Text != "before truncate" {
+			t.Fatalf("line=%+v", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out before truncation")
+	}
+
+	if err := os.Truncate(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Let the follower observe that the current inode shrank before appending
+	// the next record. This models copytruncate-style log rotation.
+	time.Sleep(2 * followPollInterval)
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("after truncate\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	select {
+	case line := <-ch:
+		if line.Text != "after truncate" {
+			t.Fatalf("line=%+v", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out after truncation")
+	}
+}

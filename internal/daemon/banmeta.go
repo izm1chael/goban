@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -16,12 +19,16 @@ import (
 )
 
 type banMetadata struct {
-	IP       string    `json:"ip"`
-	Rule     string    `json:"rule"`
-	Source   string    `json:"source"`
-	Origin   string    `json:"origin"`
-	BannedAt time.Time `json:"banned_at"`
-	TTL      string    `json:"ttl"`
+	DecisionID    string    `json:"decision_id"`
+	IP            string    `json:"ip"`
+	Rule          string    `json:"rule"`
+	Source        string    `json:"source"`
+	Origin        string    `json:"origin"`
+	BannedAt      time.Time `json:"banned_at"`
+	TTL           string    `json:"ttl"`
+	EvidenceCount int       `json:"evidence_count,omitempty"`
+	FirstSeen     time.Time `json:"first_seen,omitempty"`
+	LastSeen      time.Time `json:"last_seen,omitempty"`
 }
 
 type banMetadataStore struct {
@@ -92,28 +99,25 @@ func banMetadataPathFor(statePath string) string {
 
 func (d *Daemon) recordRuleBan(ev rule.BanEvent) {
 	d.recordBan(banMetadata{
-		IP:       ev.IP,
-		Rule:     ev.Rule,
-		Source:   ev.Source,
-		Origin:   "automatic",
-		BannedAt: ev.OccurredAt.UTC(),
-		TTL:      ev.TTL.String(),
+		DecisionID: newDecisionID(),
+		IP:         ev.IP, Rule: ev.Rule, Source: ev.Source, Origin: "automatic",
+		BannedAt: ev.OccurredAt.UTC(), TTL: ev.TTL.String(),
+		EvidenceCount: ev.EvidenceCount, FirstSeen: ev.FirstSeen.UTC(), LastSeen: ev.LastSeen.UTC(),
 	})
 }
 
 func (d *Daemon) recordBan(meta banMetadata) {
+	if meta.DecisionID == "" {
+		meta.DecisionID = newDecisionID()
+	}
 	if meta.BannedAt.IsZero() {
 		meta.BannedAt = time.Now().UTC()
 	}
 	d.banMeta.put(meta)
 	if d.audit != nil {
 		if err := d.audit.Log(control.AuditEvent{
-			Time:   meta.BannedAt,
-			Action: "ban",
-			IP:     meta.IP,
-			Rule:   meta.Rule,
-			TTL:    meta.TTL,
-			Source: meta.Source,
+			Time: meta.BannedAt, Action: "ban", IP: meta.IP, Rule: meta.Rule, TTL: meta.TTL, Source: meta.Source, Origin: meta.Origin,
+			DecisionID: meta.DecisionID, EvidenceCount: meta.EvidenceCount, FirstSeen: meta.FirstSeen, LastSeen: meta.LastSeen,
 		}); err != nil {
 			d.log.Error().Err(err).Msg("confirmed ban applied but audit write failed")
 		}
@@ -122,9 +126,12 @@ func (d *Daemon) recordBan(meta banMetadata) {
 }
 
 func (d *Daemon) recordUnban(ip netip.Addr, source string) {
+	meta, _ := d.banMeta.get(ip)
 	d.banMeta.del(ip)
 	if d.audit != nil {
-		if err := d.audit.Log(control.AuditEvent{Action: "unban", IP: ip.String(), Source: source}); err != nil {
+		if err := d.audit.Log(control.AuditEvent{
+			Action: "unban", IP: ip.String(), Rule: meta.Rule, Source: source, Origin: source, DecisionID: meta.DecisionID,
+		}); err != nil {
 			d.log.Error().Err(err).Msg("unban applied but audit write failed")
 		}
 	}
@@ -188,13 +195,21 @@ func (d *Daemon) pruneBanMetadata(bans []banner.BanInfo) bool {
 	return d.banMeta.retain(active)
 }
 
-func (d *Daemon) overlayBanMetadata(ip netip.Addr, ruleName string) (string, string, time.Time) {
+func (d *Daemon) overlayBanMetadata(ip netip.Addr, ruleName string) banMetadata {
 	m, ok := d.banMeta.get(ip)
 	if !ok {
-		return ruleName, "", time.Time{}
+		return banMetadata{IP: ip.String(), Rule: ruleName}
 	}
-	if ruleName == "" {
-		ruleName = m.Rule
+	if ruleName != "" {
+		m.Rule = ruleName
 	}
-	return ruleName, m.Source, m.BannedAt
+	return m
+}
+
+func newDecisionID() string {
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("decision-%d", time.Now().UTC().UnixNano())
+	}
+	return "dec-" + hex.EncodeToString(raw[:])
 }

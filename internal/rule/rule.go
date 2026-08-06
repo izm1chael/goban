@@ -28,11 +28,14 @@ const (
 
 // BanEvent is emitted only after the banner has confirmed the kernel-side ban.
 type BanEvent struct {
-	IP         string
-	Rule       string
-	Source     string
-	TTL        time.Duration
-	OccurredAt time.Time
+	IP            string
+	Rule          string
+	Source        string
+	TTL           time.Duration
+	OccurredAt    time.Time
+	EvidenceCount int
+	FirstSeen     time.Time
+	LastSeen      time.Time
 }
 
 type Rule struct {
@@ -262,6 +265,7 @@ func (r *Rule) process(ctx context.Context, line source.LogLine) {
 	if !trip {
 		return
 	}
+	evidenceCount, firstSeen, lastSeen := r.tracker.Evidence(ip)
 	if err := r.banner.Ban(ctx, ip, r.Name, r.BanTime); err != nil {
 		r.log.Error().Err(err).Str("ip", ip.String()).Msg("ban failed")
 		return
@@ -272,7 +276,10 @@ func (r *Rule) process(ctx context.Context, line source.LogLine) {
 	r.tracker.Reset(ip)
 	now := time.Now().UTC()
 	if r.onBan != nil {
-		r.onBan(BanEvent{IP: ip.String(), Rule: r.Name, Source: r.SourceName, TTL: r.BanTime, OccurredAt: now})
+		r.onBan(BanEvent{
+			IP: ip.String(), Rule: r.Name, Source: r.SourceName, TTL: r.BanTime, OccurredAt: now,
+			EvidenceCount: evidenceCount, FirstSeen: firstSeen.UTC(), LastSeen: lastSeen.UTC(),
+		})
 	}
 	r.log.Info().Str("ip", ip.String()).Dur("ttl", r.BanTime).Msg("banned")
 }

@@ -74,3 +74,13 @@ func TestBanMetadataPathFor(t *testing.T) {
 		t.Fatalf("empty state path produced %q", got)
 	}
 }
+
+func TestApplyRuntimeOverrides(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.LogLevel = "info"
+	cfg.LogFile = "/from-yaml.log"
+	applyRuntimeOverrides(cfg, RuntimeOverrides{LogLevel: "debug", LogFile: "/from-cli.log"})
+	if cfg.LogLevel != "debug" || cfg.LogFile != "/from-cli.log" {
+		t.Fatalf("runtime overrides not applied: level=%q file=%q", cfg.LogLevel, cfg.LogFile)
+	}
+}

@@ -11,8 +11,7 @@ import (
 )
 
 // Audit is an append-only JSON-lines logger for confirmed automatic and
-// manual ban/unban actions. Writes are
-// serialized by a mutex; the underlying writer is `*os.File` in production
+// manual ban/unban actions. Writes are serialized by a mutex; the underlying writer is `*os.File` in production
 // or a `*bytes.Buffer` in tests.
 //
 // Format example (one line, pretty-printed for readability):
@@ -36,12 +35,17 @@ type Audit struct {
 
 // AuditEvent is one entry in the audit log.
 type AuditEvent struct {
-	Time   time.Time `json:"time"`
-	Action string    `json:"action"`
-	IP     string    `json:"ip"`
-	Rule   string    `json:"rule,omitempty"`
-	TTL    string    `json:"ttl,omitempty"`
-	Source string    `json:"source"`
+	Time          time.Time `json:"time"`
+	Action        string    `json:"action"`
+	IP            string    `json:"ip"`
+	Rule          string    `json:"rule,omitempty"`
+	TTL           string    `json:"ttl,omitempty"`
+	Source        string    `json:"source"`
+	Origin        string    `json:"origin,omitempty"`
+	DecisionID    string    `json:"decision_id,omitempty"`
+	EvidenceCount int       `json:"evidence_count,omitempty"`
+	FirstSeen     time.Time `json:"first_seen,omitempty"`
+	LastSeen      time.Time `json:"last_seen,omitempty"`
 }
 
 // NewAuditFile opens (or creates) path in append mode with mode 0640.

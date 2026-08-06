@@ -320,3 +320,19 @@ func TestLoadWithFingerprintRejectsChangedRule(t *testing.T) {
 		t.Fatalf("mismatched state was loaded")
 	}
 }
+
+func TestEvidenceReturnsWindowBounds(t *testing.T) {
+	clk := &fakeClock{now: time.Date(2026, 8, 6, 18, 0, 0, 0, time.UTC)}
+	tr := New(3, 10*time.Minute)
+	tr.Now = clk.Now
+	addr := mustAddr(t, "198.51.100.10")
+	first := clk.now.Add(-8 * time.Minute)
+	last := clk.now.Add(-2 * time.Minute)
+	tr.HitAt(addr, first)
+	tr.HitAt(addr, clk.now.Add(-5*time.Minute))
+	tr.HitAt(addr, last)
+	count, gotFirst, gotLast := tr.Evidence(addr)
+	if count != 3 || !gotFirst.Equal(first) || !gotLast.Equal(last) {
+		t.Fatalf("Evidence=(%d,%s,%s), want (3,%s,%s)", count, gotFirst, gotLast, first, last)
+	}
+}

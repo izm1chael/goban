@@ -11,13 +11,20 @@ goban-client \- inspect and control a running goban-daemon
 .SH DESCRIPTION
 .B goban-client
 uses the daemon's Unix socket to inspect health and effective rule settings,
-list confirmed kernel bans, apply manual changes, request transactional reload,
-and test a loaded rule through the production processing pipeline.
+list and explain confirmed kernel bans, verify live protection, validate the
+effective startup configuration, apply manual changes, request transactional
+reload, and test a loaded rule through the production processing pipeline.
 .SH COMMANDS
 .TP
 .B status
 Show version, uptime, source/rule counts, degraded-source count, dropped lines,
 active bans, and any firewall-list error.
+.TP
+.B "doctor [--probe] [--probe-ip IP]"
+Report HEALTHY, DEGRADED, or NOT ENFORCING from live source, socket, storage,
+and firewall state. With --probe, insert, list, and remove a short-lived test
+address through the configured kernel backend. This proves backend writes, not
+packet-path coverage; use the privileged integration suite for INPUT/FORWARD.
 .TP
 .B sources
 Show each source's lifecycle status, subscriber count, delivered/dropped
@@ -31,6 +38,10 @@ allowlists, exclusions, trusted-proxy settings, and strike snapshots.
 List currently active kernel bans with rule attribution, TTL, and expiration
 when available.
 .TP
+.B "explain " \fIIP_OR_DECISION_ID\fR
+Explain an active decision with rule/source attribution, origin, threshold,
+accepted-strike count, and first/last evidence timestamps when available.
+.TP
 .B "ban " \fIIP\fR " \-\-rule " \fILABEL\fR " [\-\-ttl " \fIDURATION\fR "]"
 Apply a manual confirmed ban. TTL defaults to one hour and must fit the same
 kernel-safe limits as configured rules.
@@ -42,11 +53,20 @@ Remove a ban. A successful operation is written to the audit stream.
 Strictly load and transactionally apply reloadable configuration. Candidate
 validation/startup failure leaves the active graph running.
 .TP
-.B "test \-\-rule " \fINAME\fR " " \fILOGFILE\fR " | " \-
-Fetch the complete effective rule and run it against a file or stdin using the
-same matcher, 16-KiB record bound, timestamp policy, exclusions, global and
-per-rule allowlists, trusted-proxy gate, and tracker. A noop banner prevents
-kernel changes.
+.B "rule test \-\-rule " \fINAME\fR " [\-\-config " \fIPATH\fR "] [\-\-rules-dir " \fIDIR\fR "] " \fILOGFILE\fR " | " \-
+Fetch the complete effective rule from the daemon, or load the exact startup
+configuration offline when --config is supplied, and run it against a file or
+stdin using the same matcher, 16-KiB record bound, timestamp policy, exclusions,
+global and per-rule allowlists, trusted-proxy gate, and tracker. A noop banner
+prevents kernel changes.
+.TP
+.B "config validate [--config PATH] [--rules-dir DIR]"
+Load the main YAML, environment overrides, and enabled rule directory in the
+same order as daemon startup; apply defaults and strict validation. Does not
+require a running daemon.
+.TP
+.B "config show-effective [--config PATH] [--rules-dir DIR]"
+Print the fully resolved configuration with human-readable durations.
 .TP
 .B version
 Print client version.
@@ -60,18 +80,22 @@ Emit JSON for status, sources, rules, or banned.
 .SH EXAMPLES
 .nf
 goban-client status
+goban-client doctor --probe
 goban-client sources
 goban-client --json rules | jq .
 goban-client list
+goban-client explain 198.51.100.7
 goban-client ban 198.51.100.7 --rule manual --ttl 12h
 goban-client unban 198.51.100.7
-goban-client test --rule sshd /var/log/auth.log.1
+goban-client rule test --rule sshd /var/log/auth.log.1
+goban-client rule test --rule sshd --config /etc/goban/goban.yaml /tmp/fixtures.log
+goban-client config validate --config /etc/goban/goban.yaml
 goban-client reload
 .fi
 .SH PERMISSIONS
 The socket normally has mode 0660 and the configured group owner. Membership
-permits manual bans, unbans, and reloads; grant it as an administrative
-privilege.
+permits manual bans, unbans, reloads, diagnostics, and access to decision
+metadata; grant it as an administrative privilege.
 .SH EXIT STATUS
 .TP
 .B 0

@@ -27,6 +27,22 @@ type BanInfo struct {
 	TTL       time.Duration
 }
 
+// Diagnostic is one backend-specific enforcement health check. It is kept in
+// the banner package so doctor can inspect concrete firewall hooks without
+// coupling the backend to the control API.
+type Diagnostic struct {
+	Name        string
+	Status      string // pass, warn, fail, or skip
+	Detail      string
+	Remediation string
+}
+
+// Diagnoser is implemented by backends that can verify their installed
+// packet-path hooks in addition to listing the underlying decision sets.
+type Diagnoser interface {
+	Diagnostics(ctx context.Context) []Diagnostic
+}
+
 // Banner manages the runtime ban set.
 //
 // Setup is invoked once at daemon start and must be idempotent — repeated

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -52,7 +51,7 @@ func run() error {
 	defer closeLog()
 	log := logging.Get()
 
-	d, err := daemon.New(cfg, *log, version, *configPath, *rulesDir)
+	d, err := daemon.New(cfg, *log, version, *configPath, *rulesDir, daemon.RuntimeOverrides{LogLevel: *logLevel, LogFile: *logFile})
 	if err != nil {
 		return fmt.Errorf("daemon init: %w", err)
 	}
@@ -90,12 +89,9 @@ func run() error {
 }
 
 func loadConfig(path, rulesDir, logLevel, logFile string) (*config.Config, error) {
-	cfg, err := config.LoadConfigFromFile(path)
+	cfg, err := config.LoadEffective(path, rulesDir)
 	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-	if err := config.ApplyEnvOverrides(cfg); err != nil {
-		return nil, fmt.Errorf("env overrides: %w", err)
+		return nil, err
 	}
 	if logLevel != "" {
 		cfg.LogLevel = logLevel
@@ -103,43 +99,8 @@ func loadConfig(path, rulesDir, logLevel, logFile string) (*config.Config, error
 	if logFile != "" {
 		cfg.LogFile = logFile
 	}
-	dir := rulesDir
-	if dir == "" {
-		dir = cfg.RulesDir
-	}
-	if dir != "" {
-		extra, err := loadRulesDir(dir)
-		if err != nil {
-			return nil, fmt.Errorf("load rules dir %s: %w", dir, err)
-		}
-		cfg.Rules = append(cfg.Rules, extra...)
-	}
-	cfg.ApplyRuleDefaults()
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("validate config: %w", err)
+		return nil, fmt.Errorf("validate config after CLI overrides: %w", err)
 	}
 	return cfg, nil
-}
-
-func loadRulesDir(dir string) ([]config.RuleConfig, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []config.RuleConfig
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if filepath.Ext(name) != ".yaml" && filepath.Ext(name) != ".yml" {
-			continue
-		}
-		rules, err := config.LoadRulesFile(filepath.Join(dir, name))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
-		out = append(out, rules...)
-	}
-	return out, nil
 }

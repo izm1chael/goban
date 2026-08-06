@@ -63,12 +63,39 @@ type RuleInfo struct {
 
 // BanInfo is one entry in GET /banned.
 type BanInfo struct {
-	IP        string        `json:"ip"`
-	Rule      string        `json:"rule,omitempty"`
-	Source    string        `json:"source,omitempty"`
-	BannedAt  time.Time     `json:"banned_at,omitempty"`
-	TTL       time.Duration `json:"ttl,omitempty"`
-	ExpiresAt time.Time     `json:"expires_at,omitempty"`
+	DecisionID    string        `json:"decision_id,omitempty"`
+	IP            string        `json:"ip"`
+	Rule          string        `json:"rule,omitempty"`
+	Source        string        `json:"source,omitempty"`
+	Origin        string        `json:"origin,omitempty"`
+	BannedAt      time.Time     `json:"banned_at,omitempty"`
+	TTL           time.Duration `json:"ttl,omitempty"`
+	ExpiresAt     time.Time     `json:"expires_at,omitempty"`
+	EvidenceCount int           `json:"evidence_count,omitempty"`
+	FirstSeen     time.Time     `json:"first_seen,omitempty"`
+	LastSeen      time.Time     `json:"last_seen,omitempty"`
+}
+
+// DoctorCheck is one operator-facing verification result. Status is pass,
+// warn, fail, or skip.
+type DoctorCheck struct {
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	Detail      string `json:"detail"`
+	Remediation string `json:"remediation,omitempty"`
+}
+
+// DoctorResp is returned by POST /doctor. Overall is healthy, degraded, or
+// not_enforcing.
+type DoctorResp struct {
+	Overall   string        `json:"overall"`
+	CheckedAt time.Time     `json:"checked_at"`
+	Checks    []DoctorCheck `json:"checks"`
+}
+
+type DoctorReq struct {
+	Probe   bool   `json:"probe"`
+	ProbeIP string `json:"probe_ip,omitempty"`
 }
 
 type UnbanReq struct {

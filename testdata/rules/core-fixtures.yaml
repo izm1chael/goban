@@ -1,0 +1,70 @@
+cases:
+  - name: sshd ipv4 password failure
+    rule: sshd
+    line: 'Aug  6 18:00:01 host sshd[123]: Failed password for invalid user root from 198.51.100.20 port 51000 ssh2'
+    match: true
+    ip: 198.51.100.20
+  - name: sshd ipv6 password failure
+    rule: sshd
+    line: 'Aug  6 18:00:01 host sshd[123]: Failed password for root from 2001:db8::20 port 51000 ssh2'
+    match: true
+    ip: '2001:db8::20'
+  - name: sshd accepted login is negative
+    rule: sshd
+    line: 'Aug  6 18:00:01 host sshd[123]: Accepted publickey for admin from 198.51.100.20 port 51000 ssh2'
+    match: false
+  - name: sshd malformed address is negative
+    rule: sshd
+    line: 'Failed password for root from definitely-not-an-ip port 51000 ssh2'
+    match: false
+
+  - name: nginx auth ipv4
+    rule: nginx-http-auth
+    line: '198.51.100.30 - - [06/Aug/2026:18:00:00 +0100] "POST /login HTTP/1.1" 401 123 "-" "agent"'
+    match: true
+    ip: 198.51.100.30
+  - name: nginx auth ipv6
+    rule: nginx-http-auth
+    line: '2001:db8::30 - - [06/Aug/2026:18:00:00 +0100] "GET /private HTTP/1.1" 401 123 "-" "agent"'
+    match: true
+    ip: '2001:db8::30'
+  - name: nginx success is negative
+    rule: nginx-http-auth
+    line: '198.51.100.30 - - [06/Aug/2026:18:00:00 +0100] "POST /login HTTP/1.1" 200 123 "-" "agent"'
+    match: false
+
+  - name: nginx malformed client address is negative
+    rule: nginx-http-auth
+    line: 'not-an-address - - [06/Aug/2026:18:00:00 +0100] "POST /login HTTP/1.1" 401 123 "-" "agent"'
+    match: false
+
+  - name: apache auth ipv4 with port
+    rule: apache-auth
+    line: '[Thu Aug 06 18:00:00.000000 2026] [auth_basic:error] [pid 1] [client 198.51.100.40:51234] user root authentication failure'
+    match: true
+    ip: 198.51.100.40
+  - name: apache auth bracketed ipv6 with port
+    rule: apache-auth
+    line: '[Thu Aug 06 18:00:00.000000 2026] [auth_basic:error] [pid 1] [client [2001:db8::40]:51234] user root authentication failure'
+    match: true
+    ip: '2001:db8::40'
+  - name: apache ordinary error is negative
+    rule: apache-auth
+    line: '[Thu Aug 06 18:00:00.000000 2026] [core:error] [pid 1] [client 198.51.100.40:51234] File does not exist: /favicon.ico'
+    match: false
+
+  - name: apache malformed client address is negative
+    rule: apache-auth
+    line: '[Thu Aug 06 18:00:00.000000 2026] [auth_basic:error] [pid 1] [client not-an-address] user root authentication failure'
+    match: false
+
+  - name: postfix sasl ipv4
+    rule: postfix-sasl
+    line: 'postfix/smtpd[1]: warning: host.example[198.51.100.50]: SASL LOGIN authentication failed'
+    match: true
+    ip: 198.51.100.50
+  - name: postfix sasl ipv6
+    rule: postfix-sasl
+    line: 'postfix/smtpd[1]: warning: host.example[2001:db8::50]: SASL PLAIN authentication failed'
+    match: true
+    ip: '2001:db8::50'

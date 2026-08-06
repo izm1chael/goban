@@ -2,6 +2,7 @@ package banner
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strings"
 	"sync"
@@ -331,4 +332,41 @@ func TestNoopBanner_BanBatch(t *testing.T) {
 		t.Fatalf("len(bans) = %d, want 2", len(bans))
 	}
 	_ = strings.Contains // satisfy import
+}
+
+func TestIPTablesDiagnosticsChecksEveryConfiguredHook(t *testing.T) {
+	missingForward := errors.New("rule missing")
+	runner := &recordingRunner{respond: func(name string, args []string) ([]byte, []byte, error) {
+		if name == "iptables" && len(args) > 1 && args[1] == "FORWARD" {
+			return nil, []byte("Bad rule"), missingForward
+		}
+		return nil, nil, nil
+	}}
+	b := NewIPTables("v4", "v6", true)
+	b.SetChains([]string{"INPUT", "FORWARD"})
+	b.SetRunner(runner)
+
+	checks := b.Diagnostics(context.Background())
+	if len(checks) != 4 {
+		t.Fatalf("len(checks)=%d, want 4", len(checks))
+	}
+	got := map[string]string{}
+	for _, check := range checks {
+		got[check.Name] = check.Status
+	}
+	if got["iptables INPUT hook"] != "pass" || got["ip6tables INPUT hook"] != "pass" {
+		t.Fatalf("input hook diagnostics=%v", got)
+	}
+	if got["iptables FORWARD hook"] != "fail" || got["ip6tables FORWARD hook"] != "pass" {
+		t.Fatalf("forward hook diagnostics=%v", got)
+	}
+}
+
+func TestIPTablesDiagnosticsFailsWithoutChains(t *testing.T) {
+	b := NewIPTables("v4", "v6", false)
+	b.SetChains(nil)
+	checks := b.Diagnostics(context.Background())
+	if len(checks) != 1 || checks[0].Status != "fail" {
+		t.Fatalf("checks=%+v, want one failure", checks)
+	}
 }

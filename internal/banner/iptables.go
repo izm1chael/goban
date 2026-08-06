@@ -155,6 +155,47 @@ func (b *IPTables) ensureRule(ctx context.Context, ipt, set string) error {
 	return b.ensureRuleInChain(ctx, ipt, "INPUT", set)
 }
 
+// Diagnostics verifies that every configured packet path still contains the
+// exact set-backed DROP rule installed by Setup. This catches firewall reloads
+// or external automation that removed a hook while leaving the ipset intact.
+func (b *IPTables) Diagnostics(ctx context.Context) []Diagnostic {
+	if len(b.Chains) == 0 {
+		return []Diagnostic{{
+			Name:        "iptables hooks",
+			Status:      "fail",
+			Detail:      "no enforcement chains are configured",
+			Remediation: "configure INPUT and, for bridged workloads, FORWARD or DOCKER-USER",
+		}}
+	}
+	checks := make([]Diagnostic, 0, len(b.Chains)*2)
+	appendCheck := func(binary, chain, set string) {
+		args := []string{"-C", chain, "-m", "set", "--match-set", set, "src", "-j", "DROP"}
+		_, stderr, err := b.runner.Run(ctx, binary, args...)
+		name := fmt.Sprintf("%s %s hook", binary, chain)
+		if err != nil {
+			detail := strings.TrimSpace(string(stderr))
+			if detail == "" {
+				detail = err.Error()
+			}
+			checks = append(checks, Diagnostic{
+				Name:        name,
+				Status:      "fail",
+				Detail:      fmt.Sprintf("DROP rule for @%s is missing or unreadable: %s", set, detail),
+				Remediation: "restart GoBan or restore the firewall hook, then run the kernel integration test",
+			})
+			return
+		}
+		checks = append(checks, Diagnostic{Name: name, Status: "pass", Detail: fmt.Sprintf("%s source addresses are matched against @%s and dropped", chain, set)})
+	}
+	for _, chain := range b.Chains {
+		appendCheck("iptables", chain, b.SetV4)
+		if b.UseIPv6 {
+			appendCheck("ip6tables", chain, b.SetV6)
+		}
+	}
+	return checks
+}
+
 func (b *IPTables) ensureRuleInChain(ctx context.Context, ipt, chain, set string) error {
 	ruleArgs := []string{"-m", "set", "--match-set", set, "src", "-j", "DROP"}
 	checkArgs := append([]string{"-C", chain}, ruleArgs...)

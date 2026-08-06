@@ -379,3 +379,26 @@ func TestRule_ForwardedClientRequiresTrustedProxy(t *testing.T) {
 		t.Fatalf("trusted proxy bans=%+v", bans)
 	}
 }
+
+func TestRule_BanEventIncludesEvidence(t *testing.T) {
+	b := banner.NewNoop()
+	var got BanEvent
+	r, err := New(Config{
+		Name: "sshd", SourceName: "auth", Pattern: `Failed password from (?P<ip>\S+)`,
+		MaxRetries: 3, FindTime: time.Minute, BanTime: time.Hour,
+		Banner: b, Logger: zerolog.Nop(), OnBan: func(ev BanEvent) { got = ev },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-10 * time.Second)
+	for i := 0; i < 3; i++ {
+		r.Process(context.Background(), source.LogLine{Text: "Failed password from 198.51.100.11", Time: base.Add(time.Duration(i) * time.Second)})
+	}
+	if got.EvidenceCount != 3 {
+		t.Fatalf("EvidenceCount=%d, want 3", got.EvidenceCount)
+	}
+	if got.FirstSeen.IsZero() || got.LastSeen.IsZero() || got.LastSeen.Before(got.FirstSeen) {
+		t.Fatalf("invalid evidence window: %+v", got)
+	}
+}

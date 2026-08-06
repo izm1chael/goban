@@ -80,6 +80,14 @@ func (c *Client) Reload(ctx context.Context) error {
 	return c.post(ctx, "/reload", struct{}{}, nil)
 }
 
+// Doctor asks the daemon to verify its live protection state. Probe performs
+// an explicit temporary kernel insert/list/remove cycle.
+func (c *Client) Doctor(ctx context.Context, req DoctorReq) (DoctorResp, error) {
+	var out DoctorResp
+	err := c.post(ctx, "/doctor", req, &out)
+	return out, err
+}
+
 func (c *Client) get(ctx context.Context, path string, out any) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://goban"+path, nil)
 	resp, err := c.http.Do(req)

@@ -55,6 +55,14 @@ func NewBatched(inner Banner, log zerolog.Logger, opts BatchOpts) *BatchedBanner
 
 func (b *BatchedBanner) Setup(ctx context.Context) error { return b.inner.Setup(ctx) }
 
+// Diagnostics delegates packet-path verification to the wrapped backend.
+func (b *BatchedBanner) Diagnostics(ctx context.Context) []Diagnostic {
+	if d, ok := b.inner.(Diagnoser); ok {
+		return d.Diagnostics(ctx)
+	}
+	return []Diagnostic{{Name: "firewall hooks", Status: "skip", Detail: "backend does not expose hook diagnostics"}}
+}
+
 func (b *BatchedBanner) Ban(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
 	q := queuedBan{
 		req:    BanRequest{IP: ip, Rule: rule, TTL: ttl},

@@ -3,6 +3,8 @@ package banner
 import (
 	"context"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -197,5 +199,42 @@ func TestNFTables_CloseNoFlushPreservesTable(t *testing.T) {
 	}
 	if len(mock.destroyed) != 0 {
 		t.Errorf("Close(flush=false) should NOT destroy; got destroys=%v", mock.destroyed)
+	}
+}
+
+func TestNFTablesDiagnosticsVerifiesRenderedSetHooks(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "nft")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'chain %s { ip saddr @v4 drop; ip6 saddr @v6 drop; }\\n' \"$5\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	b := NewNFTables("goban", "v4", "v6", "input", true)
+	b.SetForwardChain("forward")
+	checks := b.Diagnostics(context.Background())
+	if len(checks) != 2 {
+		t.Fatalf("len(checks)=%d, want 2", len(checks))
+	}
+	for _, check := range checks {
+		if check.Status != "pass" {
+			t.Fatalf("check=%+v, want pass", check)
+		}
+	}
+}
+
+func TestNFTablesDiagnosticsFailsWhenExpectedSetHookIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "nft")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'chain input { ip saddr @v4 drop; }'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	b := NewNFTables("goban", "v4", "v6", "input", true)
+	b.SetForwardChain("")
+	checks := b.Diagnostics(context.Background())
+	if len(checks) != 1 || checks[0].Status != "fail" {
+		t.Fatalf("checks=%+v, want one failure", checks)
 	}
 }

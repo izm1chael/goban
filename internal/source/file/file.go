@@ -14,7 +14,7 @@ import (
 	"github.com/izm1chael/goban/internal/source"
 )
 
-const followPollInterval = 200 * time.Millisecond
+const followPollInterval = 10 * time.Millisecond
 
 // Source follows one file and fans out bounded lines to subscribers.
 type Source struct {
@@ -28,6 +28,7 @@ type Source struct {
 
 	mu     sync.Mutex
 	f      *os.File
+	offset int64
 	cancel context.CancelFunc
 	closed bool
 }
@@ -78,6 +79,7 @@ func (s *Source) Start(ctx context.Context) error {
 		return err
 	}
 	s.setFile(f)
+	s.setOffset(offset)
 	s.health.Running()
 	go s.run(runCtx, f, info, offset)
 	return nil
@@ -105,6 +107,30 @@ func (s *Source) openInitial() (*os.File, os.FileInfo, int64, error) {
 		}
 	}
 	return f, info, offset, nil
+}
+
+// Drain waits until the current file follower has read through the file's
+// current end. Reload uses this before replacing a live file source so bytes
+// buffered behind an EOF poll are not skipped at cutover.
+func (s *Source) Drain(ctx context.Context) error {
+	for {
+		info, err := os.Stat(s.path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		offset := s.offset
+		s.mu.Unlock()
+		if offset >= info.Size() {
+			return nil
+		}
+		if !sleepContext(ctx, followPollInterval) {
+			return ctx.Err()
+		}
+	}
 }
 
 func (s *Source) openFromStart() (*os.File, os.FileInfo, error) {
@@ -151,6 +177,7 @@ func (s *Source) run(ctx context.Context, f *os.File, info os.FileInfo, offset i
 				continue
 			}
 			offset = 0
+			s.setOffset(offset)
 			acc.Reset()
 			s.setFile(f)
 			s.health.Running()
@@ -159,6 +186,7 @@ func (s *Source) run(ctx context.Context, f *os.File, info os.FileInfo, offset i
 		n, err := f.Read(buf)
 		if n > 0 {
 			offset += int64(n)
+			s.setOffset(offset)
 			acc.Feed(buf[:n], func(text string) bool {
 				now := time.Now()
 				s.health.Event(now)
@@ -196,6 +224,7 @@ func (s *Source) run(ctx context.Context, f *os.File, info os.FileInfo, offset i
 				s.setFile(nil)
 			} else {
 				offset = 0
+				s.setOffset(offset)
 			}
 			acc.Reset()
 			continue
@@ -223,6 +252,12 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 func (s *Source) setFile(f *os.File) {
 	s.mu.Lock()
 	s.f = f
+	s.mu.Unlock()
+}
+
+func (s *Source) setOffset(offset int64) {
+	s.mu.Lock()
+	s.offset = offset
 	s.mu.Unlock()
 }
 

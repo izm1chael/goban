@@ -67,6 +67,10 @@ make build                 CGO-free daemon and client
 make build-journald        daemon with sdjournal support
 make test                  go test ./...
 make test-race             go test -race ./...
+make verify-release        formatting, vet, race, fixtures, script syntax
+make test-fault            repeated lifecycle/failure tests
+make test-kernel           representative privileged end-to-end firewall tests
+make package-smoke         build/install deb, rpm, and Arch packages in clean containers
 make docker-build          Alpine runtime image
 make docker-build-journald Debian journald-capable image
 make man                   regenerate compressed man pages
@@ -102,9 +106,12 @@ The package does not start the daemon automatically on first install:
 
 ```bash
 sudo editor /etc/goban/goban.yaml
+sudo goban-client config validate --config /etc/goban/goban.yaml
+sudo goban-client config show-effective --config /etc/goban/goban.yaml
 sudo systemctl enable --now goban
 sudo goban-client status
 sudo goban-client sources
+sudo goban-client doctor --probe
 ```
 
 Enable another bundle only after defining every source it references:
@@ -379,18 +386,29 @@ sudo systemctl enable --now goban-persist.service
 
 ```text
 goban-client status
+goban-client doctor
+goban-client doctor --probe
 goban-client sources
 goban-client rules
 goban-client list
+goban-client explain 198.51.100.7
 goban-client ban 198.51.100.7 --rule manual --ttl 12h
 goban-client unban 198.51.100.7
 goban-client reload
-goban-client test --rule sshd /var/log/auth.log
+goban-client rule test --rule sshd /var/log/auth.log
+# Test an enabled or candidate rule without a running daemon:
+goban-client rule test --rule sshd --config /etc/goban/goban.yaml /var/log/auth.log
+goban-client config validate --config /etc/goban/goban.yaml
+goban-client config show-effective --config /etc/goban/goban.yaml
 ```
 
 The socket defaults to `/run/goban/goban.sock`, mode `0660`. When `socket_group: goban` is configured, GoBan resolves that group and applies socket ownership; an unknown group fails control-server startup rather than silently leaving `root:root` ownership.
 
-Offline `test` fetches the complete effective rule from the daemon and runs the same matcher, date policy, exclusions, allowlists, trusted-proxy gate, tracker, and noop banner pipeline. Input is read with the same 16 KiB bounded-record semantics.
+`rule test` either fetches the complete effective rule from the daemon or, with `--config`/`--rules-dir`, loads the exact startup configuration offline. It runs the same matcher, date policy, exclusions, allowlists, trusted-proxy gate, tracker, and noop banner pipeline. Input is read with the same 16 KiB bounded-record semantics. The compatibility alias `goban-client test` remains available.
+
+`doctor` reports `HEALTHY`, `DEGRADED`, or `NOT ENFORCING` from live source, storage, socket, and firewall state. `--probe` additionally inserts, observes, and removes a short-lived documentation address in the kernel set. That proves the backend write path; use the privileged network-namespace suite below to prove packets are actually blocked through INPUT and FORWARD.
+
+`explain` accepts an active IP or decision ID. Confirmed automatic bans persist a decision ID, accepted-strike count, and first/last evidence timestamps alongside rule/source attribution. Manual bans are identified explicitly.
 
 ## Bundled rule library
 
@@ -399,12 +417,33 @@ The library under `examples/rules.d/` covers sshd, nginx, Apache, WordPress, Nex
 Treat bundles as reviewed starting points, not universal log parsers. Before enabling one:
 
 1. define its documented source;
-2. run `goban-client test` against real local positive and negative samples;
+2. run `goban-client rule test` against real local positive and negative samples;
 3. verify IPv4 and IPv6 formats;
 4. verify reverse-proxy attribution;
 5. reload and inspect `goban-client sources` and `goban-client rules`.
 
-CI validates all bundled YAML and includes representative IPv4/IPv6 fixtures.
+CI validates all bundled YAML. The 1.0 core-supported set (`sshd`, `nginx-http-auth`, and `apache-auth`) is gated by positive, negative, malformed, IPv4, and IPv6 fixtures in `testdata/rules/`. The support policy is documented in `docs/RULE_SUPPORT.md` and exact log-format/proxy notes in `docs/CORE_RULES.md`; other bundles remain available/experimental until they meet the same bar.
+
+## Release verification
+
+GoBan treats kernel truth and failure recovery as release requirements, not optional manual QA. The non-privileged gate is:
+
+```bash
+make verify-release
+make test-fault
+```
+
+On an expendable Linux VM with root privileges, prove the complete log-to-packet path:
+
+```bash
+make build
+sudo test/integration/kernel/run.sh iptables input 4
+sudo test/integration/kernel/run.sh iptables forward 4
+sudo test/integration/kernel/run.sh nftables input 6
+sudo test/integration/kernel/run.sh nftables forward 6
+```
+
+The full release workflow runs all eight backend/path/family combinations plus package installation smoke tests. See `docs/RELEASE_CHECKLIST.md`. A kernel test passes only when a remote network namespace can connect before the threshold, the active decision is confirmed and explainable, and the same connection is blocked afterwards.
 
 ## Benchmarks
 
@@ -455,6 +494,9 @@ examples/                sample config and rules-available library
 packaging/               nfpm and Arch packaging
 man/                     daemon/client manual pages
 benchmark/               load and exact-accounting harnesses
+docs/                      threat model, rule support, release checklist
+test/                      fault, privileged kernel, and package gates
+testdata/rules/            core rule positive/negative fixture corpus
 ```
 
 ## License

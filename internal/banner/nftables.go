@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +91,69 @@ func (b *NFTables) Setup(ctx context.Context) error {
 		return fmt.Errorf("nftables setup: %w", err)
 	}
 	return nil
+}
+
+// Diagnostics uses the optional nft userspace inspector to verify that the
+// configured base chains still reference GoBan's address sets. The daemon's
+// enforcement hot path remains direct netlink; `nft` is used only for this
+// human-invoked diagnostic because its rendered rule listing is the most
+// portable way to confirm complete expressions across supported kernels.
+func (b *NFTables) Diagnostics(ctx context.Context) []Diagnostic {
+	if _, err := exec.LookPath("nft"); err != nil {
+		return []Diagnostic{{
+			Name:        "nftables hooks",
+			Status:      "skip",
+			Detail:      "the nft inspection utility is unavailable; set operations remain testable with --probe",
+			Remediation: "install nftables or run test/integration/kernel/run.sh to verify packet-path enforcement",
+		}}
+	}
+	chains := []string{b.Chain}
+	if b.ForwardChain != "" {
+		chains = append(chains, b.ForwardChain)
+	}
+	checks := make([]Diagnostic, 0, len(chains))
+	for _, chain := range chains {
+		cmd := exec.CommandContext(ctx, "nft", "list", "chain", "inet", b.Table, chain)
+		out, err := cmd.CombinedOutput()
+		name := fmt.Sprintf("nftables %s hook", chain)
+		if err != nil {
+			detail := strings.TrimSpace(string(out))
+			if detail == "" {
+				detail = err.Error()
+			}
+			checks = append(checks, Diagnostic{
+				Name:        name,
+				Status:      "fail",
+				Detail:      "configured base chain is missing or unreadable: " + detail,
+				Remediation: "restart GoBan or restore the nftables table, then run the kernel integration test",
+			})
+			continue
+		}
+		rendered := string(out)
+		missing := []string{}
+		if !strings.Contains(rendered, "@"+b.SetV4) {
+			missing = append(missing, b.SetV4)
+		}
+		if b.UseIPv6 && !strings.Contains(rendered, "@"+b.SetV6) {
+			missing = append(missing, b.SetV6)
+		}
+		if len(missing) > 0 {
+			checks = append(checks, Diagnostic{
+				Name:        name,
+				Status:      "fail",
+				Detail:      fmt.Sprintf("chain exists but does not reference expected sets: %s", strings.Join(missing, ", ")),
+				Remediation: "restart GoBan or restore its set-backed drop rules",
+			})
+			continue
+		}
+		checks = append(checks, Diagnostic{Name: name, Status: "pass", Detail: fmt.Sprintf("chain references @%s%s", b.SetV4, func() string {
+			if b.UseIPv6 {
+				return " and @" + b.SetV6
+			}
+			return ""
+		}())})
+	}
+	return checks
 }
 
 // Ban adds ip to the appropriate set with the per-element TTL.

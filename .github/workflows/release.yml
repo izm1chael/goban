@@ -37,12 +37,28 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NFPM_VERSION: '2.42.1'
+  NFPM_VERSION: '2.43.4'
 
 jobs:
+  verify:
+    name: release-candidate verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Static, race, fixtures, and fault gates
+        run: |
+          make verify-release
+          make test-fault
+          make test-reload
+
   packages:
     name: build packages (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -170,6 +186,12 @@ jobs:
           echo "=== dist/ ==="; ls -lh artifacts/dist/ || true
           echo "=== binaries ==="; ls -lh artifacts/goban-* || true
 
+      - name: Generate release checksums
+        run: |
+          cd artifacts
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -198,3 +220,4 @@ jobs:
             artifacts/dist/*.pkg.tar.zst
             artifacts/goban-daemon-*
             artifacts/goban-client-*
+            artifacts/SHA256SUMS
