@@ -3,7 +3,6 @@ package corpus
 import (
 	"bufio"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,6 +22,33 @@ type GenerateReport struct {
 	Profile   string         `json:"profile"`
 	Expected  map[string]int `json:"expected_matches"`
 	Generated time.Time      `json:"generated_at"`
+}
+
+// deterministicRNG is a tiny SplitMix64 generator used only for reproducible
+// synthetic corpus construction. It intentionally is not a cryptographic RNG:
+// corpus output must be stable for a given seed and never produces secrets,
+// tokens, keys, or security decisions.
+type deterministicRNG struct {
+	state uint64
+}
+
+func newDeterministicRNG(seed int64) *deterministicRNG {
+	return &deterministicRNG{state: uint64(seed)}
+}
+
+func (r *deterministicRNG) Uint64() uint64 {
+	r.state += 0x9e3779b97f4a7c15
+	z := r.state
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
+}
+
+func (r *deterministicRNG) Intn(n int) int {
+	if n <= 0 {
+		panic("deterministicRNG.Intn called with non-positive bound")
+	}
+	return int(r.Uint64() % uint64(n))
 }
 
 func Generate(opts GenerateOptions) (GenerateReport, error) {
@@ -51,7 +77,7 @@ func Generate(opts GenerateOptions) (GenerateReport, error) {
 		return GenerateReport{}, err
 	}
 	writer := bufio.NewWriterSize(f, 256*1024)
-	rng := rand.New(rand.NewSource(opts.Seed))
+	rng := newDeterministicRNG(opts.Seed)
 	expected := make(map[string]int)
 	for i := 0; i < opts.Lines; i++ {
 		rule, line := generatedLine(rng, opts.Profile, i)
@@ -73,7 +99,7 @@ func Generate(opts GenerateOptions) (GenerateReport, error) {
 	return GenerateReport{Output: opts.Output, Lines: opts.Lines, Seed: opts.Seed, Profile: opts.Profile, Expected: expected, Generated: time.Now().UTC()}, nil
 }
 
-func generatedLine(rng *rand.Rand, profile string, index int) (string, string) {
+func generatedLine(rng *deterministicRNG, profile string, index int) (string, string) {
 	families := []string{"sshd", "nginx-http-auth", "apache-auth", "postfix-sasl", "dovecot", "traefik-auth", "negative"}
 	if profile == "sshd" {
 		families = []string{"sshd", "sshd", "negative"}
@@ -116,7 +142,7 @@ func generatedLine(rng *rand.Rand, profile string, index int) (string, string) {
 	}
 }
 
-func generatedIP(rng *rand.Rand, ipv6 bool) string {
+func generatedIP(rng *deterministicRNG, ipv6 bool) string {
 	if ipv6 {
 		return fmt.Sprintf("2001:db8:%x:%x::%x", rng.Intn(0xffff), rng.Intn(0xffff), 1+rng.Intn(0xfffe))
 	}

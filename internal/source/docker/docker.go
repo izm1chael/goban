@@ -11,10 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
-	dockerclient "github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	dockerclient "github.com/moby/moby/client"
 
 	"github.com/izm1chael/goban/internal/source"
 )
@@ -27,10 +26,10 @@ const (
 
 // Client is the subset of the Docker SDK used by the source.
 type Client interface {
-	Ping(ctx context.Context) (interface{}, error)
-	ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error)
-	ContainerLogs(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error)
-	Events(ctx context.Context, opts events.ListOptions) (<-chan events.Message, <-chan error)
+	Ping(ctx context.Context) error
+	ContainerList(ctx context.Context, filters dockerclient.Filters) ([]container.Summary, error)
+	ContainerLogs(ctx context.Context, id string) (io.ReadCloser, error)
+	Events(ctx context.Context, filters dockerclient.Filters) (<-chan events.Message, <-chan error)
 	Close() error
 }
 
@@ -59,7 +58,7 @@ type Config struct {
 }
 
 func New(cfg Config) (*Source, error) {
-	cli, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	cli, err := dockerclient.New(dockerclient.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
@@ -99,7 +98,7 @@ func (s *Source) Start(ctx context.Context) error {
 	}
 	s.cancel = cancel
 	s.mu.Unlock()
-	if _, err := s.cli.Ping(runCtx); err != nil {
+	if err := s.cli.Ping(runCtx); err != nil {
 		cancel()
 		s.health.Error(err)
 		return fmt.Errorf("docker ping failed (hint: --group-add docker, mount /var/run/docker.sock): %w", err)
@@ -141,13 +140,10 @@ func displayName(c container.Summary) string {
 	return c.ID
 }
 
-func (s *Source) eventFilters() filters.Args {
-	args := filters.NewArgs()
-	args.Add("type", "container")
-	args.Add("event", "start")
-	args.Add("event", "die")
-	args.Add("event", "destroy")
-	return args
+func (s *Source) eventFilters() dockerclient.Filters {
+	return make(dockerclient.Filters).
+		Add("type", "container").
+		Add("event", "start", "die", "destroy")
 }
 
 // watchEvents reconnects whenever Docker closes either event channel. It also
@@ -162,7 +158,7 @@ func (s *Source) watchEvents(ctx context.Context) {
 	backoff := minReconnectBackoff
 
 	for ctx.Err() == nil {
-		msgCh, errCh := s.cli.Events(ctx, events.ListOptions{Filters: s.eventFilters()})
+		msgCh, errCh := s.cli.Events(ctx, s.eventFilters())
 		reconnect := false
 		for !reconnect && ctx.Err() == nil {
 			select {
@@ -209,7 +205,7 @@ func (s *Source) watchEvents(ctx context.Context) {
 }
 
 func (s *Source) reconcile(ctx context.Context) error {
-	current, err := s.cli.ContainerList(ctx, container.ListOptions{All: false})
+	current, err := s.cli.ContainerList(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -239,7 +235,7 @@ func (s *Source) handleEvent(ctx context.Context, msg events.Message) {
 	}
 	switch msg.Action {
 	case events.ActionStart:
-		list, err := s.cli.ContainerList(ctx, container.ListOptions{Filters: filters.NewArgs(filters.Arg("id", id))})
+		list, err := s.cli.ContainerList(ctx, make(dockerclient.Filters).Add("id", id))
 		if err != nil {
 			s.health.Error(err)
 			return
@@ -284,13 +280,7 @@ func (s *Source) streamLogs(ctx context.Context, id, name string) {
 	defer s.detach(id)
 	backoff := minReconnectBackoff
 	for ctx.Err() == nil {
-		rc, err := s.cli.ContainerLogs(ctx, id, container.LogsOptions{
-			ShowStdout: true,
-			ShowStderr: true,
-			Follow:     true,
-			Tail:       "0",
-			Timestamps: false,
-		})
+		rc, err := s.cli.ContainerLogs(ctx, id)
 		if err != nil {
 			if !isContextErr(err) {
 				s.health.Error(fmt.Errorf("container %s logs: %w", name, err))
@@ -400,16 +390,32 @@ func errString(err error) string {
 
 type realClient struct{ c *dockerclient.Client }
 
-func (r *realClient) Ping(ctx context.Context) (interface{}, error) {
-	return r.c.Ping(ctx)
+func (r *realClient) Ping(ctx context.Context) error {
+	_, err := r.c.Ping(ctx, dockerclient.PingOptions{NegotiateAPIVersion: true})
+	return err
 }
-func (r *realClient) ContainerList(ctx context.Context, opts container.ListOptions) ([]container.Summary, error) {
-	return r.c.ContainerList(ctx, opts)
+
+func (r *realClient) ContainerList(ctx context.Context, filters dockerclient.Filters) ([]container.Summary, error) {
+	result, err := r.c.ContainerList(ctx, dockerclient.ContainerListOptions{All: false, Filters: filters})
+	if err != nil {
+		return nil, err
+	}
+	return result.Items, nil
 }
-func (r *realClient) ContainerLogs(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
-	return r.c.ContainerLogs(ctx, id, opts)
+
+func (r *realClient) ContainerLogs(ctx context.Context, id string) (io.ReadCloser, error) {
+	return r.c.ContainerLogs(ctx, id, dockerclient.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     true,
+		Tail:       "0",
+		Timestamps: false,
+	})
 }
-func (r *realClient) Events(ctx context.Context, opts events.ListOptions) (<-chan events.Message, <-chan error) {
-	return r.c.Events(ctx, opts)
+
+func (r *realClient) Events(ctx context.Context, filters dockerclient.Filters) (<-chan events.Message, <-chan error) {
+	result := r.c.Events(ctx, dockerclient.EventsListOptions{Filters: filters})
+	return result.Messages, result.Err
 }
+
 func (r *realClient) Close() error { return r.c.Close() }

@@ -201,6 +201,7 @@ docker run --rm --network host \
 ```
 
 The current single-container image intentionally uses `enforcer.mode: direct`; `--network host` and `NET_ADMIN` are therefore required for the container to modify the host network namespace. Native systemd packages use split mode. Mounting the Docker socket is required only for Docker log sources and is itself root-equivalent.
+GoBan uses the supported split Moby Engine client/API modules; Docker log sources require an Engine exposing API v1.40 or newer.
 
 ## Minimal configuration
 
@@ -490,6 +491,8 @@ sudo test/integration/kernel/run.sh nftables forward 6
 ```
 
 The full release workflow runs all eight backend/path/family combinations plus package installation smoke tests. A kernel test passes only when a remote network namespace can connect before the threshold, the active decision is confirmed and explainable, and the same connection is blocked afterwards.
+
+Pre-release tags never update the container `latest` tag. Stable tags promote `latest` only after the versioned GitHub release has been successfully created.
 
 ## Benchmarks
 

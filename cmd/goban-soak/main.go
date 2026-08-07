@@ -203,10 +203,6 @@ func start(args []string) error {
 		return err
 	}
 	defer logFile.Close()
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	childArgs := []string{"run", "--duration", flags.duration.String(), "--interval", flags.interval.String(), "--sock", flags.socket, "--out", flags.out}
 	if flags.reloadEvery > 0 {
 		childArgs = append(childArgs, "--reload-every", flags.reloadEvery.String())
@@ -214,7 +210,9 @@ func start(args []string) error {
 	if flags.probeEvery > 0 {
 		childArgs = append(childArgs, "--probe-every", flags.probeEvery.String())
 	}
-	cmd := exec.Command(exe, childArgs...)
+	// /proc/self/exe is a kernel-provided, static path to this exact binary.
+	// Avoid accepting a command path from configuration or user-controlled input.
+	cmd := exec.Command("/proc/self/exe", childArgs...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
