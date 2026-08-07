@@ -93,3 +93,17 @@ Open a GitHub issue with:
 See [SECURITY.md](SECURITY.md). Use GitHub's private vulnerability reporting
 workflow under the Security tab — **do not** open a public issue for security
 problems.
+
+## Migration, setup, and soak changes
+
+Changes to `internal/migrate` must prove that unsupported Fail2Ban behavior is
+reported rather than silently approximated. Generated staging configuration
+must pass the production `config.LoadEffective` path.
+
+Changes to `internal/setup` must remain observational by default. Setup may
+write a staging directory only after an explicit flag and must begin in
+`dry_run` mode.
+
+Changes to `goban-soak` must preserve append-only raw samples. Report logic is
+a release gate, so new failure criteria require tests and a corresponding
+update to `docs/SOAK_TESTING.md`.

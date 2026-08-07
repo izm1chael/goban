@@ -4,13 +4,14 @@ DIST_DIR := dist
 DAEMON := $(BIN_DIR)/goban-daemon
 CLIENT := $(BIN_DIR)/goban-client
 CORPUS := $(BIN_DIR)/goban-corpus
+SOAK := $(BIN_DIR)/goban-soak
 LDFLAGS := -s -w
 PKGS := ./...
 VERSION ?= 1.0.0
 ARCH    ?= amd64
 export ARCH
 
-.PHONY: all build build-journald corpus corpus-generate corpus-external fuzz-short test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
+.PHONY: all build build-journald corpus corpus-generate corpus-external fuzz-short soak-smoke test-adoption reproducible test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
 
 all: build
 
@@ -19,12 +20,14 @@ build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(DAEMON) ./cmd/goban-daemon
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SOAK) ./cmd/goban-soak
 
 build-journald:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=1 go build -trimpath -tags=journald -ldflags="$(LDFLAGS)" -o $(DAEMON) ./cmd/goban-daemon
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SOAK) ./cmd/goban-soak
 
 test:
 	go test $(PKGS)
@@ -52,10 +55,20 @@ lint:
 
 # Non-privileged release gate. Kernel and package verification remain separate
 # because they need root/network namespaces and container/package tooling.
-verify-release: vet test-race corpus
+verify-release: vet test-race corpus reproducible soak-smoke test-adoption
 	@test -z "$$(gofmt -l cmd internal benchmark)" || { echo "gofmt required:"; gofmt -l cmd internal benchmark; exit 1; }
-	bash -n test/corpus/run.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/reload/run.sh test/integration/package/run.sh test/fault/run.sh
+	bash -n test/corpus/run.sh test/migration/run.sh test/setup/run.sh test/soak/smoke.sh scripts/reproducible-build.sh scripts/release-evidence.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/kernel/matrix.sh test/integration/reload/run.sh test/integration/package/run.sh test/integration/package/upgrade.sh test/fault/run.sh
 	go test -run TestCoreRuleFixtures ./internal/config
+
+soak-smoke: build
+	test/soak/smoke.sh
+
+test-adoption: build
+	test/migration/run.sh
+	test/setup/run.sh
+
+reproducible:
+	scripts/reproducible-build.sh
 
 # Extended lifecycle/fault repetition.
 test-fault: build
@@ -92,7 +105,8 @@ clean:
 man:
 	@gzip -fk man/goban-daemon.8
 	@gzip -fk man/goban-client.1
-	@echo "man pages → man/goban-daemon.8.gz, man/goban-client.1.gz"
+	@gzip -fk man/goban-soak.1
+	@echo "man pages → daemon, client, and soak pages"
 
 # Build .deb, .rpm, and .pkg.tar.zst (Arch) via nfpm. Install nfpm with:
 #   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest

@@ -17,8 +17,10 @@ post_install() {
 GoBan installed successfully.
 
 Next steps:
-  1. Review /etc/goban/goban.yaml; enable extra rules from /usr/share/goban/rules-available/
-  2. Enable + start the daemon:
+  1. Generate a reviewable dry-run proposal:
+       sudo goban-client setup --write --out /root/goban-setup
+  2. Review /etc/goban/goban.yaml; enable extra rules from /usr/share/goban/rules-available/
+  3. Enable + start the daemon:
        sudo systemctl enable --now goban
 
 Test a rule offline before deploying it:

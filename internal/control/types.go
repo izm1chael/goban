@@ -15,6 +15,8 @@ type StatusResp struct {
 	NumSources      int       `json:"num_sources"`
 	DegradedSources int       `json:"degraded_sources"`
 	DroppedLines    uint64    `json:"dropped_lines"`
+	MemoryBytes     uint64    `json:"memory_bytes"`
+	Goroutines      int       `json:"goroutines"`
 	BannerError     string    `json:"banner_error,omitempty"`
 }
 

@@ -68,6 +68,16 @@ require a running daemon.
 .B "config show-effective [--config PATH] [--rules-dir DIR]"
 Print the fully resolved configuration with human-readable durations.
 .TP
+.B "setup [--write] [--out DIR] [--root DIR] [--rules-available DIR]"
+Detect the host firewall, logging system, IPv6, Docker, existing Fail2Ban, and
+common service logs. Without --write it is observational. Written proposals
+are staging directories and begin with dry_run enabled.
+.TP
+.B "migrate fail2ban [--root DIR] [--out DIR] [--rules-available DIR] [--overwrite]"
+Convert reviewed enabled Fail2Ban jails into a GoBan staging directory. Custom
+filters and actions are reported for review or as unsupported; the command
+never changes the live service or firewall.
+.TP
 .B version
 Print client version.
 .SH GLOBAL FLAGS
@@ -90,6 +100,8 @@ goban-client unban 198.51.100.7
 goban-client rule test --rule sshd /var/log/auth.log.1
 goban-client rule test --rule sshd --config /etc/goban/goban.yaml /tmp/fixtures.log
 goban-client config validate --config /etc/goban/goban.yaml
+goban-client setup --write --out /root/goban-setup
+goban-client migrate fail2ban --out /root/goban-migration
 goban-client reload
 .fi
 .SH PERMISSIONS
@@ -107,6 +119,7 @@ Socket, validation, or daemon operation failed.
 .B 2
 Usage error.
 .SH SEE ALSO
-.BR goban-daemon (8)
+.BR goban-daemon (8),
+.BR goban-soak (1)
 .SH AUTHOR
 GoBan is developed by izm1chael. License: MIT.

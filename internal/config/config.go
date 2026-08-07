@@ -153,6 +153,7 @@ func DefaultConfig() *Config {
 		FlushOnExit:       false,
 		StrikeChanSize:    256,
 		BatchBans:         true,
+		AuditLog:          "/var/log/goban/audit.log",
 		StatePath:         "/var/lib/goban/state.gob",
 		StateSaveInterval: 30 * time.Second,
 		Banner: BannerConfig{

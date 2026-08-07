@@ -31,6 +31,9 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -92,6 +95,12 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
             go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
             -o bin/goban-client ./cmd/goban-client
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
+            go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
+            -o bin/goban-corpus ./cmd/goban-corpus
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
+            go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
+            -o bin/goban-soak ./cmd/goban-soak
 
       - name: Install nfpm
         run: |
@@ -104,6 +113,7 @@ jobs:
         run: |
           gzip -fk man/goban-daemon.8
           gzip -fk man/goban-client.1
+          gzip -fk man/goban-soak.1
           ls -lh man/
 
       - name: Build .deb, .rpm, .pkg.tar.zst
@@ -118,12 +128,21 @@ jobs:
           done
           ls -lh ../dist/
 
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./bin
+          format: spdx-json
+          output-file: dist/goban-${{ steps.ver.outputs.version }}-${{ matrix.arch }}.spdx.json
+
       - name: Rename binaries for release attach
         env:
           ARCH: ${{ matrix.arch }}
         run: |
           mv bin/goban-daemon "bin/goban-daemon-linux-$ARCH"
           mv bin/goban-client "bin/goban-client-linux-$ARCH"
+          mv bin/goban-corpus "bin/goban-corpus-linux-$ARCH"
+          mv bin/goban-soak "bin/goban-soak-linux-$ARCH"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -132,6 +151,8 @@ jobs:
             dist/
             bin/goban-daemon-linux-${{ matrix.arch }}
             bin/goban-client-linux-${{ matrix.arch }}
+            bin/goban-corpus-linux-${{ matrix.arch }}
+            bin/goban-soak-linux-${{ matrix.arch }}
           retention-days: 7
 
   docker:
@@ -192,6 +213,22 @@ jobs:
           find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.0
+
+      - name: Sign checksum manifest with keyless OIDC
+        working-directory: artifacts
+        run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            artifacts/dist/*
+            artifacts/goban-*
+            artifacts/SHA256SUMS
+            artifacts/SHA256SUMS.sigstore.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -220,4 +257,8 @@ jobs:
             artifacts/dist/*.pkg.tar.zst
             artifacts/goban-daemon-*
             artifacts/goban-client-*
+            artifacts/goban-corpus-*
+            artifacts/goban-soak-*
+            artifacts/dist/*.spdx.json
             artifacts/SHA256SUMS
+            artifacts/SHA256SUMS.sigstore.json

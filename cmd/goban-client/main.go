@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -20,7 +21,9 @@ import (
 	"github.com/izm1chael/goban/internal/config"
 	"github.com/izm1chael/goban/internal/control"
 	"github.com/izm1chael/goban/internal/matcher"
+	"github.com/izm1chael/goban/internal/migrate"
 	"github.com/izm1chael/goban/internal/rule"
+	setupplan "github.com/izm1chael/goban/internal/setup"
 	"github.com/izm1chael/goban/internal/source"
 )
 
@@ -46,6 +49,8 @@ Commands:
   rule test --rule NAME <file|->      simulate the production rule pipeline
   config validate [flags]      validate the exact effective startup config
   config show-effective [flags]       print the resolved effective config
+  setup [flags]                detect the host and write a dry-run setup proposal
+  migrate fail2ban [flags]     convert enabled Fail2Ban jails into a staging directory
   reload                       reload config from disk (validate-then-swap)
   version                      print client version
 
@@ -109,6 +114,10 @@ func run() error {
 		return doTest(ctx, c, rest[1:])
 	case "config":
 		return doConfig(rest, asJSON)
+	case "setup":
+		return doSetup(rest, asJSON)
+	case "migrate":
+		return doMigrate(rest, asJSON)
 	case "reload":
 		return doReload(ctx, c)
 	case "version":
@@ -120,6 +129,119 @@ func run() error {
 	default:
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+func doSetup(args []string, asJSON bool) error {
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	root := fs.String("root", "/", "filesystem root to inspect (used by tests/chroots)")
+	out := fs.String("out", "./goban-setup", "staging directory to write")
+	rulesAvailable := fs.String("rules-available", defaultRulesAvailable(), "directory containing reviewed GoBan rule bundles")
+	write := fs.Bool("write", false, "write the proposal to --out")
+	overwrite := fs.Bool("overwrite", false, "replace a non-empty output directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: goban-client setup [--root /] [--write] [--out DIR] [--rules-available DIR]")
+	}
+	plan, err := setupplan.Detect(*root)
+	if err != nil {
+		return err
+	}
+	if *write {
+		if err := setupplan.Write(plan, setupplan.Options{Root: *root, OutputDir: *out, RulesAvailable: *rulesAvailable, Overwrite: *overwrite}); err != nil {
+			return err
+		}
+	}
+	if asJSON {
+		return printJSON(plan)
+	}
+	fmt.Printf("Detected host: %s", plan.Facts.Distribution)
+	if plan.Facts.Version != "" {
+		fmt.Printf(" %s", plan.Facts.Version)
+	}
+	fmt.Println()
+	fmt.Printf("Firewall: nftables=%t iptables=%t ipset=%t IPv6=%t\n", plan.Facts.NFTables, plan.Facts.IPTables, plan.Facts.IPSet, plan.Facts.IPv6)
+	fmt.Printf("Logging: systemd=%t journald=%t Docker=%t\n", plan.Facts.Systemd, plan.Facts.Journald, plan.Facts.Docker)
+	fmt.Printf("Detected services: %s\n", valueOr(strings.Join(plan.Facts.Services, ", "), "none"))
+	backend := plan.Config.Banner.Backend
+	if !plan.Facts.NFTables && !(plan.Facts.IPTables && plan.Facts.IPSet) {
+		backend = "none detected (iptables placeholder; dry-run only)"
+	}
+	fmt.Printf("Proposed backend: %s\n", backend)
+	fmt.Printf("Proposed bundles: %s\n", valueOr(strings.Join(plan.EnabledBundles, ", "), "none"))
+	fmt.Println("Safety mode: dry_run=true")
+	for _, warning := range plan.Facts.Warnings {
+		fmt.Printf("WARNING: %s\n", warning)
+	}
+	if *write {
+		abs, _ := filepath.Abs(*out)
+		fmt.Printf("Staging directory written: %s\n", abs)
+		fmt.Printf("Validate: goban-client config validate --config %s --rules-dir %s\n", filepath.Join(abs, "goban.yaml"), filepath.Join(abs, "rules.d"))
+	} else {
+		fmt.Println("No files changed. Re-run with --write to create a staging directory.")
+	}
+	return nil
+}
+
+func doMigrate(args []string, asJSON bool) error {
+	if len(args) == 0 || args[0] != "fail2ban" {
+		return fmt.Errorf("usage: goban-client migrate fail2ban [--root /etc/fail2ban] --out DIR [--rules-available DIR] [--overwrite]")
+	}
+	fs := flag.NewFlagSet("migrate fail2ban", flag.ContinueOnError)
+	root := fs.String("root", "/etc/fail2ban", "Fail2Ban configuration root")
+	out := fs.String("out", "./goban-migration", "staging directory to write")
+	rulesAvailable := fs.String("rules-available", defaultRulesAvailable(), "directory containing reviewed GoBan rule bundles")
+	overwrite := fs.Bool("overwrite", false, "replace a non-empty output directory")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", fs.Args())
+	}
+	report, err := migrate.Convert(migrate.Options{Root: *root, OutputDir: *out, RulesAvailable: *rulesAvailable, Overwrite: *overwrite})
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return printJSON(report)
+	}
+	converted, review, unsupported := 0, 0, 0
+	for _, jail := range report.Jails {
+		switch jail.Status {
+		case "converted":
+			converted++
+		case "review":
+			review++
+		case "unsupported":
+			unsupported++
+		}
+		fmt.Printf("%-12s %-24s", strings.ToUpper(jail.Status), jail.Name)
+		if jail.Rule != "" {
+			fmt.Printf(" -> %s", jail.Rule)
+		}
+		fmt.Println()
+		for _, warning := range jail.Warnings {
+			fmt.Printf("  review: %s\n", warning)
+		}
+		for _, item := range jail.Unsupported {
+			fmt.Printf("  unsupported: %s\n", item)
+		}
+	}
+	fmt.Printf("\nConverted: %d  Review: %d  Unsupported: %d\n", converted, review, unsupported)
+	abs, _ := filepath.Abs(*out)
+	fmt.Printf("Staging directory: %s\n", abs)
+	fmt.Printf("Validate: goban-client config validate --config %s --rules-dir %s\n", filepath.Join(abs, "goban.yaml"), filepath.Join(abs, "rules.d"))
+	return nil
+}
+
+func defaultRulesAvailable() string {
+	for _, candidate := range []string{"/usr/share/goban/rules-available", "./examples/rules.d"} {
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			return candidate
+		}
+	}
+	return "/usr/share/goban/rules-available"
 }
 
 func doStatus(ctx context.Context, c *control.Client, asJSON bool) error {
@@ -135,6 +257,8 @@ func doStatus(ctx context.Context, c *control.Client, asJSON bool) error {
 	fmt.Printf("started:    %s\n", st.StartedAt.Format(time.RFC3339))
 	fmt.Printf("sources:    %d (%d degraded)\n", st.NumSources, st.DegradedSources)
 	fmt.Printf("dropped:    %d lines\n", st.DroppedLines)
+	fmt.Printf("memory:     %d bytes\n", st.MemoryBytes)
+	fmt.Printf("goroutines: %d\n", st.Goroutines)
 	if st.BannerError != "" {
 		fmt.Printf("banner:     ERROR: %s\n", st.BannerError)
 	}

@@ -34,18 +34,24 @@ build() {
     export CGO_ENABLED=0
     go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-daemon ./cmd/goban-daemon
     go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-client ./cmd/goban-client
+    go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-corpus ./cmd/goban-corpus
+    go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-soak ./cmd/goban-soak
 }
 
 package() {
     cd "${srcdir}/local"
     install -Dm755 goban-daemon "${pkgdir}/usr/bin/goban-daemon"
     install -Dm755 goban-client "${pkgdir}/usr/bin/goban-client"
+    install -Dm755 goban-corpus "${pkgdir}/usr/bin/goban-corpus"
+    install -Dm755 goban-soak "${pkgdir}/usr/bin/goban-soak"
     install -Dm644 deploy/goban.service "${pkgdir}/usr/lib/systemd/system/goban.service"
     install -Dm644 deploy/goban-persist.service "${pkgdir}/usr/lib/systemd/system/goban-persist.service"
-    install -Dm644 examples/goban.yaml "${pkgdir}/etc/goban/goban.yaml"
+    install -Dm640 examples/goban.yaml "${pkgdir}/etc/goban/goban.yaml"
     install -d "${pkgdir}/etc/goban/rules.d" "${pkgdir}/usr/share/goban/rules-available"
     install -Dm644 examples/rules.d/*.yaml -t "${pkgdir}/usr/share/goban/rules-available/"
     install -Dm644 examples/rules.d/{sshd,recidive}.yaml -t "${pkgdir}/etc/goban/rules.d/"
     install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+    install -d "${pkgdir}/usr/share/doc/${pkgname}/docs"
+    install -Dm644 docs/*.md -t "${pkgdir}/usr/share/doc/${pkgname}/docs/"
     install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
 }

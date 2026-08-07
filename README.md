@@ -75,6 +75,9 @@ make corpus                curated rule corpus through the production pipeline
 make corpus-generate       deterministic million-line mixed corpus
 make corpus-external       opt-in pinned upstream compatibility corpora
 make package-smoke         build/install deb, rpm, and Arch packages in clean containers
+make test-adoption         migration and setup staging integration tests
+make soak-smoke            short soak lifecycle/report smoke
+make reproducible          byte-compare two clean builds of every binary
 make docker-build          Alpine runtime image
 make docker-build-journald Debian journald-capable image
 make man                   regenerate compressed man pages
@@ -87,6 +90,8 @@ Release packages install:
 
 - `/usr/bin/goban-daemon`
 - `/usr/bin/goban-client`
+- `/usr/bin/goban-corpus`
+- `/usr/bin/goban-soak`
 - `/etc/goban/goban.yaml`
 - `/etc/goban/rules.d/` for enabled rule bundles
 - `/usr/share/goban/rules-available/` for the complete rule library
@@ -477,7 +482,9 @@ No throughput percentage is published here until the corrected exact-accounting 
 
 ```text
 cmd/goban-daemon/        daemon binary
-cmd/goban-client/        control client
+cmd/goban-client/        control, setup, and migration client
+cmd/goban-corpus/        curated/generated/external corpus tooling
+cmd/goban-soak/          long-running release evidence collector
 internal/allowlist/      CIDR matching and exact local-address discovery
 internal/banner/         confirmed firewall backends and batching
 internal/config/         strict layered YAML/env loading and validation
@@ -486,6 +493,8 @@ internal/daemon/         lifecycle, transactional reload, persistence
 internal/datepattern/    named and raw Go timestamp layouts
 internal/ipset/          direct-netlink ipset client
 internal/matcher/        regex captures and IP normalisation
+internal/migrate/        conservative Fail2Ban staging conversion
+internal/setup/          host detection and dry-run setup proposals
 internal/nftables/       direct-netlink nftables client
 internal/rule/           production rule pipeline
 internal/source/         bounded fan-out and record reader
@@ -503,6 +512,50 @@ test/                      fault, privileged kernel, and package gates
 testdata/rules/            compact core-rule compatibility fixtures
 testdata/corpus/           full curated corpus + external source manifest
 ```
+
+## Guided setup and Fail2Ban migration
+
+GoBan keeps host detection and migration conservative. Both commands write
+reviewable staging directories and leave the live service and firewall alone.
+
+```bash
+# Inspect the host; add --write to create ./goban-setup
+goban-client setup
+sudo goban-client setup --write --out /root/goban-setup
+
+# Convert supported enabled Fail2Ban jails into a staging directory
+sudo goban-client migrate fail2ban \
+  --root /etc/fail2ban \
+  --out /root/goban-migration
+```
+
+Generated setup configurations start with `dry_run: true`. Custom Fail2Ban
+filters and actions are reported rather than guessed. See
+[the migration guide](docs/MIGRATING_FROM_FAIL2BAN.md) and
+[setup guide](docs/SETUP_GUIDE.md).
+
+## Release-candidate soak evidence
+
+`goban-soak` samples the live daemon for hours or days and produces raw JSONL,
+a machine-readable report, and a Markdown summary.
+
+```bash
+sudo goban-soak start --duration 168h --out /var/lib/goban/soak/rc1
+goban-soak status --run /var/lib/goban/soak/rc1
+goban-soak report --run /var/lib/goban/soak/rc1
+```
+
+Optional reload and kernel-probe exercises are disabled unless explicitly
+requested. See [soak testing](docs/SOAK_TESTING.md).
+
+## Release trust
+
+Tagged release artifacts include checksums, SPDX SBOMs, and GitHub provenance
+attestations. `make reproducible` requires two clean static builds of every
+binary to match byte-for-byte. The complete evidence and external-review scope
+are documented in [release artifacts](docs/RELEASE_ARTIFACTS.md) and
+[external review](docs/EXTERNAL_REVIEW.md).
+
 
 ## License
 

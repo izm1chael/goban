@@ -18,6 +18,7 @@ docker run --rm -v "$abs_deb:/tmp/goban.deb:ro" debian:bookworm-slim bash -euxc 
   apt-get update -qq
   apt-get install -y /tmp/goban.deb
   goban-daemon --version
+  goban-soak version
   goban-client config validate --config /etc/goban/goban.yaml
   test -f /usr/share/goban/rules-available/sshd.yaml
   test -f /etc/goban/rules.d/sshd.yaml
@@ -28,6 +29,7 @@ docker run --rm -v "$abs_deb:/tmp/goban.deb:ro" debian:bookworm-slim bash -euxc 
 docker run --rm -v "$abs_rpm:/tmp/goban.rpm:ro" rockylinux:9 bash -euxc '
   dnf install -y /tmp/goban.rpm
   goban-daemon --version
+  goban-soak version
   goban-client config validate --config /etc/goban/goban.yaml
   test -f /usr/share/goban/rules-available/sshd.yaml
   test -f /etc/goban/rules.d/sshd.yaml
@@ -37,6 +39,7 @@ docker run --rm -v "$abs_arch:/tmp/goban.pkg.tar.zst:ro" archlinux:base bash -eu
   pacman -Sy --noconfirm
   pacman -U --noconfirm /tmp/goban.pkg.tar.zst
   goban-daemon --version
+  goban-soak version
   goban-client config validate --config /etc/goban/goban.yaml
   test -f /usr/share/goban/rules-available/sshd.yaml
   test -f /etc/goban/rules.d/sshd.yaml

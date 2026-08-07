@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -553,6 +554,8 @@ func (d *Daemon) Status() control.StatusResp {
 		}
 		dropped += h.Dropped
 	}
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
 	resp := control.StatusResp{
 		Version:         d.version,
 		Uptime:          time.Since(d.startedAt).Truncate(time.Second).String(),
@@ -563,6 +566,8 @@ func (d *Daemon) Status() control.StatusResp {
 		NumSources:      len(d.sources),
 		DegradedSources: degraded,
 		DroppedLines:    dropped,
+		MemoryBytes:     mem.Alloc,
+		Goroutines:      runtime.NumGoroutine(),
 	}
 	if bannerErr != nil {
 		resp.BannerError = bannerErr.Error()

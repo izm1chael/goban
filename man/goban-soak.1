@@ -1,0 +1,50 @@
+.TH GOBAN-SOAK 1 "August 2026" "GoBan 1.0" "User Commands"
+.SH NAME
+goban-soak \- collect long-running GoBan release evidence
+.SH SYNOPSIS
+.B goban-soak start
+.RI [ options ]
+.br
+.B goban-soak status --run
+.I DIR
+.br
+.B goban-soak report --run
+.I DIR
+.SH DESCRIPTION
+.B goban-soak
+samples the local GoBan control API, source health, rule counters, active
+bans, memory use, goroutine count, and doctor state. It stores JSON-lines
+samples and produces machine-readable and Markdown reports.
+.PP
+The default start mode detaches. Use
+.B --foreground
+for service managers and CI. Reload and kernel-probe exercises are disabled
+unless explicitly requested.
+.SH OPTIONS
+.TP
+.BI --duration " DURATION"
+Total soak duration. Default: 168h.
+.TP
+.BI --interval " DURATION"
+Sampling interval. Default: 10s.
+.TP
+.BI --sock " PATH"
+GoBan daemon Unix socket.
+.TP
+.BI --out " DIR"
+Run directory.
+.TP
+.B --foreground
+Run without detaching.
+.TP
+.BI --reload-every " DURATION"
+Periodically exercise transactional reload.
+.TP
+.BI --probe-every " DURATION"
+Periodically run doctor with a temporary kernel set probe.
+.SH FILES
+A run directory contains run.json, samples.jsonl, runner.log, report.json,
+and report.md.
+.SH SEE ALSO
+.BR goban-client (1),
+.BR goban-daemon (8)
