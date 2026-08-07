@@ -12,7 +12,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 ARCH    ?= amd64
 export ARCH
 
-.PHONY: all build build-journald version-smoke corpus corpus-generate corpus-external fuzz-short soak-smoke test-adoption reproducible test test-race vet lint verify-release release-gate test-invariants test-chaos mac-validate mac-selinux-container test-fault test-reload test-kernel package-smoke package-hooks package-binaries-check docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
+.PHONY: all build build-journald version-smoke corpus corpus-generate corpus-external fuzz-short soak-smoke test-adoption reproducible test test-race vet lint verify-release release-gate release-workflow-check test-invariants test-chaos mac-validate mac-selinux-container test-fault test-reload test-kernel package-smoke package-hooks package-binaries-check docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
 
 all: build
 
@@ -67,6 +67,10 @@ mac-selinux-container:
 test-invariants:
 	test/invariants/run.sh
 
+release-workflow-check:
+	test/release/workflow.sh
+	test/release/assets.sh
+
 test-chaos:
 	test/chaos/run.sh
 
@@ -84,9 +88,9 @@ lint:
 
 # Non-privileged release gate. Kernel and package verification remain separate
 # because they need root/network namespaces and container/package tooling.
-verify-release: vet test-race corpus reproducible soak-smoke test-adoption version-smoke package-hooks mac-validate test-invariants
+verify-release: vet test-race corpus reproducible soak-smoke test-adoption version-smoke package-hooks mac-validate release-workflow-check test-invariants
 	@test -z "$$(gofmt -l cmd internal benchmark)" || { echo "gofmt required:"; gofmt -l cmd internal benchmark; exit 1; }
-	bash -n test/corpus/run.sh test/migration/run.sh test/setup/run.sh test/soak/smoke.sh scripts/reproducible-build.sh scripts/release-evidence.sh scripts/release-gate.sh scripts/security/install-apparmor.sh scripts/security/install-selinux.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/kernel/matrix.sh test/integration/reload/run.sh test/integration/package/run.sh test/integration/package/upgrade.sh test/integration/package/hooks.sh test/fault/run.sh test/invariants/run.sh test/chaos/run.sh test/security/mac.sh test/security/selinux-container.sh
+	bash -n scripts/release-tag-metadata.sh scripts/stage-release-assets.sh test/release/workflow.sh test/release/assets.sh test/corpus/run.sh test/migration/run.sh test/setup/run.sh test/soak/smoke.sh scripts/reproducible-build.sh scripts/release-evidence.sh scripts/release-gate.sh scripts/security/install-apparmor.sh scripts/security/install-selinux.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/kernel/matrix.sh test/integration/reload/run.sh test/integration/package/run.sh test/integration/package/upgrade.sh test/integration/package/hooks.sh test/fault/run.sh test/invariants/run.sh test/chaos/run.sh test/security/mac.sh test/security/selinux-container.sh
 	go test -run TestCoreRuleFixtures ./internal/config
 
 soak-smoke: build

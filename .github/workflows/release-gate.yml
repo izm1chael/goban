@@ -19,7 +19,7 @@ jobs:
     name: static, race, fixtures, fault repetition
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
@@ -47,7 +47,7 @@ jobs:
         path: [input, forward]
         family: [4, 6]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
@@ -65,7 +65,7 @@ jobs:
     name: deb, rpm, Arch install smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'

@@ -20,7 +20,7 @@ A core-supported rule must have, at minimum:
 - an operator example showing direct-client versus trusted-proxy attribution;
 - production-pipeline verification with `goban-client rule test`.
 
-The compact core fixtures remain in `testdata/rules/`, while the broader production-pipeline corpus and pinned external-source metadata live in `testdata/corpus/`. CI prevents a core rule from losing positive or negative coverage and runs all curated corpus cases. Compatibility and proxy notes are in `docs/CORE_RULES.md`; corpus policy is in `docs/CORPUS_TESTING.md`.
+The compact core fixtures remain in `testdata/rules/`, while the broader production-pipeline corpus and pinned external-source metadata live in `testdata/corpus/`. CI prevents a core rule from losing positive or negative coverage and runs all curated corpus cases. Compatibility and proxy notes are in `docs/CORE_RULES.md`; corpus policy is enforced by the repository corpus manifest and CI.
 
 ## Available/experimental
 

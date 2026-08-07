@@ -8,7 +8,7 @@ user with no effective Linux capabilities. Firewall mutation is isolated in the
 small `goban-enforcer` helper, which runs as a separate non-login user, receives
 only typed decisions over a private Unix socket, and holds only `CAP_NET_ADMIN`.
 
-See `docs/PRIVILEGE_SEPARATION.md` and `docs/THREAT_MODEL.md` for the full model.
+See `docs/PRIVILEGE_SEPARATION.md` for the privilege boundary details.
 
 Important boundaries:
 

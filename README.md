@@ -1,12 +1,15 @@
 # GoBan
 
 [![CI](https://github.com/izm1chael/goban/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/izm1chael/goban/actions/workflows/ci.yml)
+[![Release Gate](https://github.com/izm1chael/goban/actions/workflows/release-gate.yml/badge.svg)](https://github.com/izm1chael/goban/actions/workflows/release-gate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Go Report](https://goreportcard.com/badge/github.com/izm1chael/goban)](https://goreportcard.com/report/github.com/izm1chael/goban)
 
-GoBan is a fail2ban-style Linux log watcher and IP banner written in Go. It consumes file, Docker, or systemd-journal logs; runs strict per-rule matching; and applies confirmed kernel bans through either iptables + ipset or native nftables.
+> **Release status:** GoBan is feature-frozen for 1.0. The next public tag should be a `v1.0.0-rc.*` release candidate; stable `v1.0.0` should be cut only after the documented kernel, package, MAC, and soak gates pass.
 
-The current design emphasises truthful enforcement state:
+GoBan is a lightweight, verifiable Linux intrusion-banning daemon and modern alternative to Fail2Ban. It consumes file, Docker, or optional systemd-journal logs; runs strict per-rule matching; and applies confirmed temporary bans through either iptables + ipset or native nftables.
+
+The design emphasises truthful enforcement state:
 
 - a rule records a ban only after the firewall backend confirms it;
 - source failures, reconnects, queue depth, and dropped lines are visible;
@@ -15,6 +18,32 @@ The current design emphasises truthful enforcement state:
 - reload builds a candidate graph first and preserves the active graph on candidate-start failure;
 - host-input and forwarded traffic are protected by default;
 - packaged systemd installs keep log parsing unprivileged and isolate firewall mutation in a tiny helper.
+
+## Install from a release
+
+Tagged releases publish Linux `amd64` and `arm64` standalone binaries, Debian/RPM/Arch packages, SPDX SBOMs, a signed SHA-256 manifest, and a multi-architecture GHCR image. Download packages from the repository's [GitHub Releases](https://github.com/izm1chael/goban/releases) page.
+
+```bash
+# Debian / Ubuntu / Mint / Raspbian
+sudo apt install ./goban_*.deb
+
+# Fedora / RHEL / Rocky / Alma
+sudo dnf install ./goban-*.rpm
+
+# Arch / Manjaro / EndeavourOS
+sudo pacman -U ./goban-*.pkg.tar.zst
+```
+
+Native packages install privilege-separated systemd units but deliberately do **not** start GoBan on first install. Review the generated/default configuration, then validate and start it:
+
+```bash
+sudo editor /etc/goban/goban.yaml
+sudo goban-client config validate --config /etc/goban/goban.yaml
+sudo systemctl enable --now goban
+sudo goban-client doctor --probe
+```
+
+The standard release packages are CGO-free. If your host has no readable authentication log and must ingest the systemd journal directly, build the journald variant as documented below; the setup command reports this requirement rather than silently generating an unusable source.
 
 ## Features
 
@@ -123,18 +152,7 @@ Release packages install:
 
 Only the `sshd` and `recidive` bundles are enabled by a fresh package. Other bundles are available but are not activated until their required sources exist.
 
-```bash
-# Debian / Ubuntu
-sudo apt install ./goban_1.0.0_amd64.deb
-
-# Fedora / RHEL family
-sudo dnf install ./goban-1.0.0-1.x86_64.rpm
-
-# Arch family
-sudo pacman -U ./goban-1.0.0-1-x86_64.pkg.tar.zst
-```
-
-The package does not start the daemon automatically on first install. Native systemd packages use privilege separation by default: `goban-daemon` runs as the dedicated `goban` account with zero effective capabilities and `goban-enforcer` runs as a separate non-login user with only `CAP_NET_ADMIN`. Upgrades restart the active pair so mixed binaries are not left running, and removal stops both services. `iptables` is a weak/recommended dependency for the default backend; the native nftables backend has no mandatory userspace firewall CLI dependency:
+The package does not start the daemon automatically on first install. Native systemd packages use privilege separation by default: `goban-daemon` runs as the dedicated `goban` account with zero effective capabilities and `goban-enforcer` runs as a separate non-login user with only `CAP_NET_ADMIN`. Upgrades restart the active pair so mixed binaries are not left running, and removal stops both services. `iptables` is a weak/recommended dependency for the default backend; the native nftables backend can enforce over netlink without a userspace CLI. For full independent nftables hook inspection/drift diagnostics, install the distribution's `nftables` package; without it `doctor` intentionally reports `DEGRADED` rather than claiming fully verified protection:
 
 ```bash
 sudo editor /etc/goban/goban.yaml
@@ -172,7 +190,7 @@ For a standalone host-network container:
 
 ```bash
 docker run --rm --network host \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
+  --cap-add NET_ADMIN \
   -v /var/log:/var/log:ro \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v /etc/goban:/etc/goban:ro \
@@ -450,7 +468,7 @@ Treat bundles as reviewed starting points, not universal log parsers. Before ena
 4. verify reverse-proxy attribution;
 5. reload and inspect `goban-client sources` and `goban-client rules`.
 
-CI validates all bundled YAML and runs the curated production-pipeline corpus in `testdata/corpus/manifest.yaml`. The current corpus covers the bundled SSH, web, mail, application, and recidive rules with positive, legitimate-negative, malformed, IPv4, IPv6, field-order, exclusion, and threshold cases. Optional pinned Fail2Ban and Loghub inputs stay outside the repository and are fetched only after explicit licence acceptance. See `docs/CORPUS_TESTING.md`, `docs/RULE_SUPPORT.md`, and `docs/CORE_RULES.md`; non-core bundles remain available/experimental until their compatibility evidence is promoted.
+CI validates all bundled YAML and runs the curated production-pipeline corpus in `testdata/corpus/manifest.yaml`. The current corpus covers the bundled SSH, web, mail, application, and recidive rules with positive, legitimate-negative, malformed, IPv4, IPv6, field-order, exclusion, and threshold cases. Optional pinned Fail2Ban and Loghub inputs stay outside the repository and are fetched only after explicit licence acceptance. See `docs/RULE_SUPPORT.md` and `docs/CORE_RULES.md`; non-core bundles remain available/experimental until their compatibility evidence is promoted.
 
 ## Release verification
 
@@ -471,7 +489,7 @@ sudo test/integration/kernel/run.sh nftables input 6
 sudo test/integration/kernel/run.sh nftables forward 6
 ```
 
-The full release workflow runs all eight backend/path/family combinations plus package installation smoke tests. See `docs/RELEASE_CHECKLIST.md`. A kernel test passes only when a remote network namespace can connect before the threshold, the active decision is confirmed and explainable, and the same connection is blocked afterwards.
+The full release workflow runs all eight backend/path/family combinations plus package installation smoke tests. A kernel test passes only when a remote network namespace can connect before the threshold, the active decision is confirmed and explainable, and the same connection is blocked afterwards.
 
 ## Benchmarks
 
@@ -572,7 +590,7 @@ goban-soak report --run /var/lib/goban/soak/rc1
 ```
 
 Optional reload and kernel-probe exercises are disabled unless explicitly
-requested. See [soak testing](docs/SOAK_TESTING.md).
+requested. See the soak smoke target in the `Makefile`.
 
 ## Final hardening and release freeze
 
@@ -590,16 +608,12 @@ make release-gate
 
 It combines race/invariant/corpus/chaos checks and deliberately refuses to call
 a build releasable until privileged kernel, package-lifecycle, and real soak
-evidence has also been attached. See [final hardening](docs/FINAL_HARDENING.md)
-and [MAC confinement](docs/MAC_CONFINEMENT.md).
+evidence has also been attached. Security policy files and their validation
+scripts live under `deploy/` and `test/security/`.
 
-## Release trust
+## Release verification
 
-Tagged release artifacts include checksums, SPDX SBOMs, and GitHub provenance
-attestations. `make reproducible` requires two clean static builds of every
-binary to match byte-for-byte. The complete evidence and external-review scope
-are documented in [release artifacts](docs/RELEASE_ARTIFACTS.md) and
-[external review](docs/EXTERNAL_REVIEW.md).
+Release channels, publication gates, signing, checksums, and reproducibility are documented in [release artifacts](docs/RELEASE_ARTIFACTS.md).
 
 
 ## License

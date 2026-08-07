@@ -105,5 +105,5 @@ write a staging directory only after an explicit flag and must begin in
 `dry_run` mode.
 
 Changes to `goban-soak` must preserve append-only raw samples. Report logic is
-a release gate, so new failure criteria require tests and a corresponding
-update to `docs/SOAK_TESTING.md`.
+a release gate, so new failure criteria require tests and an update to the
+relevant soak test or release-gate command.

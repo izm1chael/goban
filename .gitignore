@@ -18,6 +18,7 @@ man/*.gz
 # Editor / OS
 .idea/
 .vscode/
+.claude/
 .DS_Store
 *.swp
 *~

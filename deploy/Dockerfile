@@ -31,6 +31,7 @@ FROM alpine:3.20
 RUN apk add --no-cache \
       iptables \
       ip6tables \
+      nftables \
       ca-certificates \
       tzdata \
  && addgroup -S goban \
@@ -55,10 +56,10 @@ RUN mkdir -p /run/goban /var/lib/goban /var/log/goban \
 # the container single-process avoids requiring a second host-namespace helper
 # and a shared privileged socket merely to run the image.
 #
-# Direct mode therefore still requires NET_ADMIN+NET_RAW and host networking:
+# Direct mode therefore still requires NET_ADMIN and host networking:
 #
 #   docker run --rm --network host \
-#     --cap-add NET_ADMIN --cap-add NET_RAW \
+#     --cap-add NET_ADMIN \
 #     -v /var/log:/var/log:ro \
 #     -v /var/run/docker.sock:/var/run/docker.sock:ro \
 #     -v /etc/goban:/etc/goban:ro \

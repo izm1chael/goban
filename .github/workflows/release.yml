@@ -1,27 +1,21 @@
-# Release workflow: triggered by pushing a semver tag (e.g. v1.0.0).
-# Three sequential jobs:
-#   packages → cross-compile amd64 + arm64 binaries, build deb/rpm/archlinux
-#              packages, upload as artifacts
-#   docker   → multi-arch Docker image (linux/amd64 + linux/arm64) pushed to
-#              ghcr.io/izm1chael/goban:latest and :<tag>
-#   release  → create a GitHub Release with all artifacts attached and
-#              auto-generated release notes
+# GoBan tagged-release workflow.
 #
-# To cut a release:
-#   git tag v1.0.0
-#   git push --tags
+# Stable tags:
+#   v1.0.0
+#   - publish a normal GitHub Release
+#   - publish GHCR tags v1.0.0, 1.0.0, 1.0, and latest
 #
-# The first time: tag v0.0.1-rc1 to smoke-test the workflow without
-# committing the v1.0.0 name to a broken artifact.
+# Pre-release tags:
+#   v1.0.0-rc.1
+#   - publish a GitHub pre-release
+#   - publish GHCR tags v1.0.0-rc.1 and 1.0.0-rc.1
+#   - NEVER move the latest container tag
 #
-# Security posture:
-#   - Trigger is restricted to tags matching v*.*.* (no arbitrary refs)
-#   - The tag name (github.ref_name) is passed into run: commands ONLY via
-#     env: pass-through. It is never interpolated directly into shell.
-#   - No untrusted github.event.* fields (PR titles, commit messages, issue
-#     bodies, etc.) are used in this workflow.
-#   - Auth uses the repo's own GITHUB_TOKEN with explicitly-declared
-#     permissions: contents:write and packages:write.
+# Publication is fail-closed behind the release verification, privileged
+# kernel matrix, and package lifecycle smoke jobs. The release job stages all
+# downloadable files into one flat directory before generating SHA256SUMS so
+# `sha256sum -c SHA256SUMS` works exactly as documented after users download
+# the assets from GitHub Releases.
 name: Release
 
 on:
@@ -41,13 +35,33 @@ concurrency:
 
 env:
   NFPM_VERSION: '2.47.0'
+  IMAGE_NAME: ghcr.io/izm1chael/goban
 
 jobs:
+  metadata:
+    name: validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      channel: ${{ steps.release.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate semver tag and classify release
+        id: release
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          scripts/release-tag-metadata.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
+
   verify:
     name: release-candidate verification
     runs-on: ubuntu-latest
+    needs: metadata
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
@@ -66,7 +80,7 @@ jobs:
   kernel:
     name: kernel ${{ matrix.backend }} ${{ matrix.path }} IPv${{ matrix.family }}
     runs-on: ubuntu-latest
-    needs: verify
+    needs: [metadata, verify]
     strategy:
       fail-fast: false
       matrix:
@@ -74,7 +88,7 @@ jobs:
         path: [input, forward]
         family: [4, 6]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
@@ -91,18 +105,13 @@ jobs:
   package-smoke:
     name: package install / lifecycle smoke
     runs-on: ubuntu-latest
-    needs: verify
+    needs: [metadata, verify]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
-      - name: Compute version
-        id: ver
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Install nfpm
         run: |
           mkdir -p "$RUNNER_TEMP/nfpm-bin"
@@ -110,38 +119,29 @@ jobs:
           echo "$RUNNER_TEMP/nfpm-bin" >> "$GITHUB_PATH"
       - name: Package install and lifecycle smoke
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: make package-smoke VERSION="$VERSION"
 
   packages:
     name: build packages (${{ matrix.arch }})
     runs-on: ubuntu-latest
-    needs: verify
+    needs: [metadata, verify]
     strategy:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
 
-      - name: Compute version (strip the leading v)
-        id: ver
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          version="${REF_NAME#v}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Building goban $version for linux/${{ matrix.arch }}"
-
       - name: Build binaries
         env:
           ARCH: ${{ matrix.arch }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           mkdir -p bin
           CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
@@ -162,7 +162,7 @@ jobs:
 
       - name: Verify release binary identity
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           test "$(bin/goban-daemon --version)" = "$VERSION"
           test "$(bin/goban-enforcer --version)" = "$VERSION"
@@ -172,26 +172,23 @@ jobs:
 
       - name: Install nfpm
         run: |
-          # Build the pinned module through the Go module proxy/checksum path
-          # instead of executing an unchecked release tarball.
           mkdir -p "$RUNNER_TEMP/nfpm-bin"
           GOBIN="$RUNNER_TEMP/nfpm-bin" \
             go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@v${NFPM_VERSION}"
           echo "$RUNNER_TEMP/nfpm-bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/nfpm-bin/nfpm" --version | head -2
 
-      - name: Gzip man pages (nfpm reads them from man/*.gz)
+      - name: Gzip man pages
         run: |
           gzip -fk man/goban-daemon.8
           gzip -fk man/goban-enforcer.8
           gzip -fk man/goban-client.1
           gzip -fk man/goban-soak.1
-          ls -lh man/
 
       - name: Build .deb, .rpm, .pkg.tar.zst
         env:
           ARCH: ${{ matrix.arch }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           mkdir -p dist
           cd packaging
@@ -205,9 +202,9 @@ jobs:
         with:
           path: ./bin
           format: spdx-json
-          output-file: dist/goban-${{ steps.ver.outputs.version }}-${{ matrix.arch }}.spdx.json
+          output-file: dist/goban-${{ needs.metadata.outputs.version }}-${{ matrix.arch }}.spdx.json
 
-      - name: Rename binaries for release attach
+      - name: Rename binaries for release attachment
         env:
           ARCH: ${{ matrix.arch }}
         run: |
@@ -232,13 +229,27 @@ jobs:
   docker:
     name: multi-arch docker image
     runs-on: ubuntu-latest
-    needs: [packages, kernel, package-smoke]
+    needs: [metadata, packages, kernel, package-smoke]
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v6
-
+      - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v3
-
       - uses: docker/setup-buildx-action@v4
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # metadata-action normally creates latest automatically for semver.
+          # Disable it here. Stable latest is promoted only after the GitHub
+          # Release has been successfully created.
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.metadata.outputs.prerelease == 'false' }}
 
       - uses: docker/login-action@v4
         with:
@@ -246,101 +257,183 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image version
-        id: image-version
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Build + push multi-arch image
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           build-args: |
-            VERSION=${{ steps.image-version.outputs.version }}
+            VERSION=${{ needs.metadata.outputs.version }}
           push: true
-          tags: |
-            ghcr.io/izm1chael/goban:latest
-            ghcr.io/izm1chael/goban:${{ github.ref_name }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/izm1chael/goban
-            org.opencontainers.image.version=${{ github.ref_name }}
-            org.opencontainers.image.licenses=MIT
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign container digest with keyless OIDC
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+
+      - name: Verify pushed image version
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          docker pull "${IMAGE_NAME}@${DIGEST}"
+          test "$(docker run --rm "${IMAGE_NAME}@${DIGEST}" --version)" = "$VERSION"
+
+      - name: Record immutable image reference
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p release-docker
+          printf '%s@%s\n' "$IMAGE_NAME" "$DIGEST" > release-docker/docker-image.txt
+          cat release-docker/docker-image.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-docker
+          path: release-docker/docker-image.txt
+          retention-days: 7
 
   release:
     name: github release
     runs-on: ubuntu-latest
-    needs: [packages, docker, kernel, package-smoke]
+    needs: [metadata, packages, docker, kernel, package-smoke]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - name: Download package/binary artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: artifacts/packages
           pattern: packages-*
           merge-multiple: true
 
-      - name: List collected artifacts
-        run: |
-          echo "=== dist/ ==="; ls -lh artifacts/dist/ || true
-          echo "=== binaries ==="; ls -lh artifacts/goban-* || true
+      - name: Download container digest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-docker
+          path: artifacts/docker
 
-      - name: Generate release checksums
+      - name: Stage, validate, and checksum flat public release assets
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
         run: |
-          cd artifacts
-          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-          cat SHA256SUMS
+          scripts/stage-release-assets.sh \
+            artifacts/packages artifacts/docker/docker-image.txt release-assets \
+            "${{ github.ref_name }}" "$VERSION" "$CHANNEL" "${{ github.sha }}"
+          cat release-assets/SHA256SUMS
+          ls -lh release-assets
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4.1.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign checksum manifest with keyless OIDC
-        working-directory: artifacts
+        working-directory: release-assets
         run: cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
 
       - name: Attest release artifacts
-        uses: actions/attest@v4
+        uses: actions/attest@v4.2.1
         with:
-          subject-path: |
-            artifacts/dist/*
-            artifacts/goban-*
-            artifacts/SHA256SUMS
-            artifacts/SHA256SUMS.sigstore.json
+          subject-path: release-assets/*
+
+      - name: Build release introduction
+        shell: bash
+        env:
+          PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$PRERELEASE" == "true" ]]; then
+            cat > release-body.md <<EOF
+          > **Pre-release:** GoBan ${VERSION} is a 1.0 release candidate. It does not move the GHCR \`latest\` tag. Please report deployment or compatibility issues before using it as a production replacement.
+
+          ## Install
+
+          Download the package matching your distribution and architecture from the assets below, then run \`goban-client doctor --probe\` after configuration.
+
+          The release includes amd64/arm64 standalone binaries, Debian/RPM/Arch packages, SPDX SBOMs, a signed SHA-256 manifest, and an immutable container digest reference.
+          EOF
+          else
+            cat > release-body.md <<EOF
+          GoBan ${VERSION} is a stable release. The GHCR \`latest\` tag is updated only by stable releases.
+
+          ## Install
+
+          Download the package matching your distribution and architecture from the assets below, then run \`goban-client doctor --probe\` after configuration.
+
+          The release includes amd64/arm64 standalone binaries, Debian/RPM/Arch packages, SPDX SBOMs, a signed SHA-256 manifest, and an immutable container digest reference.
+          EOF
+          fi
+
+          cat >> release-body.md <<'EOF'
+
+          ```bash
+          # Debian / Ubuntu / Mint / Raspbian
+          sudo apt install ./goban_*.deb
+
+          # Fedora / RHEL / Rocky / Alma
+          sudo dnf install ./goban-*.rpm
+
+          # Arch / Manjaro / EndeavourOS
+          sudo pacman -U ./goban-*.pkg.tar.zst
+          ```
+
+          Verify downloaded assets in one directory with:
+
+          ```bash
+          cosign verify-blob \
+            --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity-regexp 'https://github.com/izm1chael/goban/' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ```
+
+          See the [README](https://github.com/izm1chael/goban#readme) for configuration, migration, privilege separation, and release-gate documentation.
+          EOF
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          name: GoBan ${{ github.ref_name }}
           generate_release_notes: true
-          body: |
-            ## Install
+          body_path: release-body.md
+          prerelease: ${{ needs.metadata.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.metadata.outputs.prerelease == 'true' && 'false' || 'true' }}
+          fail_on_unmatched_files: true
+          preserve_order: true
+          files: release-assets/*
 
-            ```bash
-            # Debian / Ubuntu / Mint / Raspbian
-            sudo apt install ./goban_*_amd64.deb     # or _arm64.deb
-
-            # Fedora / RHEL / Rocky / Alma
-            sudo dnf install ./goban-*.x86_64.rpm    # or .aarch64.rpm
-
-            # Arch / Manjaro / EndeavourOS
-            sudo pacman -U ./goban-*-x86_64.pkg.tar.zst   # or -aarch64.pkg.tar.zst
-
-            # Docker (multi-arch — pull resolves automatically)
-            docker pull ghcr.io/izm1chael/goban:${{ github.ref_name }}
-            ```
-
-            See [README](https://github.com/izm1chael/goban#readme) for full quickstart.
-          files: |
-            artifacts/dist/*.deb
-            artifacts/dist/*.rpm
-            artifacts/dist/*.pkg.tar.zst
-            artifacts/goban-daemon-*
-            artifacts/goban-client-*
-            artifacts/goban-corpus-*
-            artifacts/goban-soak-*
-            artifacts/dist/*.spdx.json
-            artifacts/SHA256SUMS
-            artifacts/SHA256SUMS.sigstore.json
+  promote-latest:
+    name: promote stable container latest
+    if: needs.metadata.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    needs: [metadata, docker, release]
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Point latest at the already-signed stable digest
+        env:
+          DIGEST: ${{ needs.docker.outputs.digest }}
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          docker buildx imagetools create \
+            --tag "${IMAGE_NAME}:latest" \
+            "${IMAGE_NAME}@${DIGEST}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:latest"
