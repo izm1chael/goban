@@ -3,7 +3,7 @@
 rules:
   - name: dovecot
     source: mail-log
-    regex: '(?:dovecot:\s*)?(?:imap|pop3|submission|smtp)-login: (?i:(?:Authentication failure|Aborted login|Disconnected \((?:auth failed|authentication failed)|Aborted login \(\d+ authentication attempts))[^\n]*\brip=(?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)'
+    regex: '(?:dovecot:\s*)?(?:(?:imap|pop3|submission|smtp|managesieve)-login: (?:Info: )?(?i:(?:Authentication failure|Aborted login|Disconnected(?:: [^(]+)? \((?:auth failed|authentication failed)|Login aborted:[^\n]*(?:auth failed|authentication failed)|Aborted login \(\d+ authentication attempts))[^\n]*\brip=(?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)|dovecot-auth: pam_unix\(dovecot:auth\): authentication failure;[^\n]*\brhost=(?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)|auth-worker(?:\([^)]*\))?: [^\n]*pam\([^,]+,(?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)\): (?i:pam_authenticate\(\) failed|unknown user))'
     max_retries: 5
     findtime: 10m
     bantime: 12h

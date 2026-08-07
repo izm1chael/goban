@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,10 @@ type banMetadata struct {
 	EvidenceCount int       `json:"evidence_count,omitempty"`
 	FirstSeen     time.Time `json:"first_seen,omitempty"`
 	LastSeen      time.Time `json:"last_seen,omitempty"`
+	// Enforced distinguishes kernel-confirmed decisions from dry-run observations.
+	// Pointer form is intentional: metadata written by older GoBan versions has
+	// no value and is therefore never replayed after a reboot.
+	Enforced *bool `json:"enforced,omitempty"`
 }
 
 type banMetadataStore struct {
@@ -64,15 +69,23 @@ func (s *banMetadataStore) get(ip netip.Addr) (banMetadata, bool) {
 	return m, ok
 }
 
-func (s *banMetadataStore) retain(active map[netip.Addr]struct{}) bool {
+func (s *banMetadataStore) retain(active map[netip.Addr]struct{}, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := false
-	for ip := range s.records {
-		if _, ok := active[ip.Unmap()]; !ok {
-			delete(s.records, ip)
-			changed = true
+	for ip, meta := range s.records {
+		if _, ok := active[ip.Unmap()]; ok {
+			continue
 		}
+		// Explicitly-enforced, unexpired decisions are durable intent. Keep
+		// them even if a firewall reload temporarily removed the kernel entry;
+		// startup can restore them and doctor can report the drift. Legacy
+		// metadata (Enforced=nil) and dry-run observations are never replayed.
+		if metadataRestorable(meta, now) {
+			continue
+		}
+		delete(s.records, ip)
+		changed = true
 	}
 	return changed
 }
@@ -101,12 +114,16 @@ func (d *Daemon) recordRuleBan(ev rule.BanEvent) {
 	d.recordBan(banMetadata{
 		DecisionID: newDecisionID(),
 		IP:         ev.IP, Rule: ev.Rule, Source: ev.Source, Origin: "automatic",
-		BannedAt: ev.OccurredAt.UTC(), TTL: ev.TTL.String(),
+		BannedAt: time.Now().UTC(), TTL: ev.TTL.String(),
 		EvidenceCount: ev.EvidenceCount, FirstSeen: ev.FirstSeen.UTC(), LastSeen: ev.LastSeen.UTC(),
 	})
 }
 
 func (d *Daemon) recordBan(meta banMetadata) {
+	if meta.Enforced == nil {
+		enforced := d.cfg == nil || !d.cfg.DryRun
+		meta.Enforced = &enforced
+	}
 	if meta.DecisionID == "" {
 		meta.DecisionID = newDecisionID()
 	}
@@ -192,7 +209,105 @@ func (d *Daemon) pruneBanMetadata(bans []banner.BanInfo) bool {
 	for _, b := range bans {
 		active[b.IP.Unmap()] = struct{}{}
 	}
-	return d.banMeta.retain(active)
+	return d.banMeta.retain(active, time.Now().UTC())
+}
+
+func metadataRestorable(meta banMetadata, now time.Time) bool {
+	if meta.Enforced == nil || !*meta.Enforced || meta.BannedAt.IsZero() {
+		return false
+	}
+	ttl, err := time.ParseDuration(meta.TTL)
+	if err != nil || ttl < time.Second {
+		return false
+	}
+	return meta.BannedAt.Add(ttl).After(now)
+}
+
+// restorePersistedBans re-applies kernel-confirmed decisions that were still
+// live when the host went down. This makes reboot persistence backend-native:
+// GoBan does not need to shell out to ipset/nft save/restore for new metadata.
+// Older metadata is deliberately attribution-only because it cannot prove the
+// decision came from real enforcement rather than dry-run mode.
+func (d *Daemon) restorePersistedBans(ctx context.Context) {
+	if d.cfg == nil || d.cfg.DryRun || d.banMeta == nil {
+		return
+	}
+	bans, err := d.banner.List(ctx)
+	if err != nil {
+		d.log.Warn().Err(err).Msg("persisted ban restore skipped — backend list failed")
+		return
+	}
+	active := make(map[netip.Addr]struct{}, len(bans))
+	for _, b := range bans {
+		active[b.IP.Unmap()] = struct{}{}
+	}
+	now := time.Now().UTC()
+	changed := false
+	for _, meta := range d.banMeta.snapshot() {
+		ip, err := netip.ParseAddr(meta.IP)
+		if err != nil {
+			d.log.Warn().Str("ip", meta.IP).Msg("persisted ban metadata discarded — invalid address")
+			// put() only accepts valid addresses, so malformed entries can only
+			// originate from an older/on-disk file and will disappear on save.
+			changed = true
+			continue
+		}
+		ip = ip.Unmap()
+		if _, ok := active[ip]; ok {
+			continue
+		}
+		if !metadataRestorable(meta, now) {
+			d.banMeta.del(ip)
+			changed = true
+			continue
+		}
+		if d.allowlist != nil && d.allowlist.Permit(ip) {
+			d.log.Warn().Str("ip", ip.String()).Str("rule", meta.Rule).Msg("persisted ban not restored — address is now allowlisted")
+			d.banMeta.del(ip)
+			changed = true
+			continue
+		}
+		ttl, _ := time.ParseDuration(meta.TTL)
+		remaining := meta.BannedAt.Add(ttl).Sub(now)
+		if remaining < time.Second {
+			d.banMeta.del(ip)
+			changed = true
+			continue
+		}
+		if err := d.banner.Ban(ctx, ip, meta.Rule, remaining); err != nil {
+			d.log.Error().Err(err).Str("ip", ip.String()).Str("rule", meta.Rule).Dur("remaining", remaining).Msg("persisted ban restore failed")
+			continue
+		}
+		active[ip] = struct{}{}
+		d.log.Info().Str("ip", ip.String()).Str("rule", meta.Rule).Dur("remaining", remaining).Msg("persisted ban restored")
+	}
+	if changed {
+		d.saveBanMetadata()
+	}
+}
+
+func (d *Daemon) missingPersistedBans(activeBans []banner.BanInfo, now time.Time) int {
+	if d.banMeta == nil {
+		return 0
+	}
+	active := make(map[netip.Addr]struct{}, len(activeBans))
+	for _, b := range activeBans {
+		active[b.IP.Unmap()] = struct{}{}
+	}
+	missing := 0
+	for _, meta := range d.banMeta.snapshot() {
+		if !metadataRestorable(meta, now) {
+			continue
+		}
+		ip, err := netip.ParseAddr(meta.IP)
+		if err != nil {
+			continue
+		}
+		if _, ok := active[ip.Unmap()]; !ok {
+			missing++
+		}
+	}
+	return missing
 }
 
 func (d *Daemon) overlayBanMetadata(ip netip.Addr, ruleName string) banMetadata {

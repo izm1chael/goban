@@ -202,6 +202,16 @@ func TestNFTables_CloseNoFlushPreservesTable(t *testing.T) {
 	}
 }
 
+func TestNFTablesDiagnosticsWarnsWhenHookInspectionUnavailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	b := NewNFTables("goban", "v4", "v6", "input", true)
+	b.SetForwardChain("forward")
+	checks := b.Diagnostics(context.Background())
+	if len(checks) != 1 || checks[0].Status != "warn" {
+		t.Fatalf("checks=%+v, want one warning", checks)
+	}
+}
+
 func TestNFTablesDiagnosticsVerifiesRenderedSetHooks(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "nft")

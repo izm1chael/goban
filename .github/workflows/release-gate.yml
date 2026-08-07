@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
@@ -44,7 +44,7 @@ jobs:
         family: [4, 6]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
@@ -62,12 +62,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
       - name: Install nfpm
-        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.43.4
+        run: |
+          mkdir -p "$RUNNER_TEMP/nfpm-bin"
+          GOBIN="$RUNNER_TEMP/nfpm-bin" \
+            go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          echo "$RUNNER_TEMP/nfpm-bin" >> "$GITHUB_PATH"
       - name: Package smoke
         run: make package-smoke VERSION=1.0.0-rc1
       - name: Upgrade preservation smoke

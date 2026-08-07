@@ -33,7 +33,17 @@ EOF
 
 post_upgrade() {
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl try-reload-or-restart goban >/dev/null 2>&1 || true
+    # ExecReload only reloads GoBan configuration; it does not replace the
+    # process image. Restart an active daemon so package upgrades actually run
+    # the new binary.
+    if systemctl is-active --quiet goban.service >/dev/null 2>&1; then
+        systemctl restart goban.service || return 1
+    fi
+}
+
+pre_remove() {
+    systemctl disable --now goban.service >/dev/null 2>&1 || true
+    systemctl disable --now goban-persist.service >/dev/null 2>&1 || true
 }
 
 post_remove() {
@@ -48,12 +58,13 @@ The following are intentionally NOT deleted:
   /var/lib/goban/        — persisted strike state
   /var/log/goban/        — audit log
   goban system user/group
-  Active kernel ipset entries (existing bans remain until reboot)
+  Existing GoBan kernel ban entries (until expiry, firewall reset, or reboot)
 
 To purge everything:
   sudo rm -rf /etc/goban /var/lib/goban /var/log/goban
   sudo ipset destroy goban-ban-v4 2>/dev/null || true
   sudo ipset destroy goban-ban-v6 2>/dev/null || true
+  sudo nft delete table inet goban 2>/dev/null || true
   sudo userdel goban && sudo groupdel goban
 
 EOF

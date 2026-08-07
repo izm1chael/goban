@@ -19,6 +19,9 @@ import (
 	"github.com/izm1chael/goban/internal/matcher"
 )
 
+// version is overridden via -ldflags at build time.
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "goban-corpus:", err)
@@ -44,6 +47,9 @@ func run(args []string) error {
 		return compatFail2BanCommand(args[1:])
 	case "scan":
 		return scanCommand(args[1:])
+	case "version":
+		fmt.Println(version)
+		return nil
 	case "help", "-h", "--help":
 		usage()
 		return nil
@@ -63,6 +69,7 @@ Usage:
   goban-corpus fetch --accept-third-party-licenses [flags]
   goban-corpus compat-fail2ban --rule NAME --file FILE [flags]
   goban-corpus scan --rule NAME --file FILE [flags]
+  goban-corpus version
 
 The repository does not vendor third-party corpora. The fetch command downloads
 pinned external test inputs into a local cache only after explicit acceptance of

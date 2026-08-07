@@ -245,6 +245,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("banner setup: %w", err)
 	}
 	d.loadBanMetadata()
+	// Reboot persistence is reconstructed from kernel-confirmed decision
+	// metadata before sources can publish new events. Existing kernel entries
+	// from an ordinary daemon restart are left untouched.
+	restoreCtx, restoreCancel := context.WithTimeout(d.rootCtx, 5*time.Second)
+	d.restorePersistedBans(restoreCtx)
+	restoreCancel()
 
 	bufSize := d.bufSize()
 	prepared := make([]string, 0, len(d.rules))

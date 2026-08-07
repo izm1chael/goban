@@ -19,9 +19,7 @@ CLIENT=${GOBAN_CLIENT:-$ROOT_DIR/bin/goban-client}
 [[ $FAMILY == 4 || $FAMILY == 6 ]] || { echo "family must be 4 or 6" >&2; exit 2; }
 for cmd in ip python3 curl; do command -v "$cmd" >/dev/null || { echo "missing $cmd" >&2; exit 77; }; done
 if [[ $BACKEND == iptables ]]; then
-  for cmd in iptables ipset; do command -v "$cmd" >/dev/null || { echo "missing $cmd" >&2; exit 77; }; done
-else
-  command -v nft >/dev/null || { echo "missing nft" >&2; exit 77; }
+  for cmd in iptables ip6tables; do command -v "$cmd" >/dev/null || { echo "missing $cmd" >&2; exit 77; }; done
 fi
 
 if [[ ! -x $DAEMON || ! -x $CLIENT ]]; then
@@ -171,4 +169,11 @@ fi
 
 "$CLIENT" --sock "$tmp/goban.sock" doctor --probe --probe-ip "${GOBAN_PROBE_IP:-192.0.2.254}" >/dev/null
 "$CLIENT" --sock "$tmp/goban.sock" explain "$attacker_addr"
-echo "PASS: $BACKEND $PATH_MODE IPv$FAMILY end-to-end enforcement"
+
+# Verify that a repeated decision refreshes the kernel timeout while this
+# backend's real test daemon/socket are still alive. This used to be invoked
+# from matrix.sh after run.sh had already torn the socket down, so the claimed
+# TTL gate could not execute correctly.
+GOBAN_CLIENT="$CLIENT" test/integration/kernel/ttl-refresh.sh "$tmp/goban.sock" 192.0.2.240
+
+echo "PASS: $BACKEND $PATH_MODE IPv$FAMILY end-to-end enforcement + TTL refresh"

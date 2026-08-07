@@ -76,10 +76,12 @@ func Detect(root string) (Plan, error) {
 	cfg.IPv6 = facts.IPv6
 	if facts.NFTables {
 		cfg.Banner.Backend = "nftables"
-	} else if facts.IPTables && facts.IPSet {
+	} else if facts.IPTables {
+		// The iptables backend manages ipset entries through netlink directly;
+		// the ipset userspace binary is optional and only useful for diagnostics.
 		cfg.Banner.Backend = "iptables"
 	} else {
-		facts.Warnings = append(facts.Warnings, "no supported nftables or iptables+ipset backend was detected")
+		facts.Warnings = append(facts.Warnings, "no supported nftables or iptables backend was detected")
 	}
 
 	bundles := []string{}

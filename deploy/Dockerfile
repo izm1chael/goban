@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for the CGO-free (no journald) build.
-# Final image is alpine because we need the iptables and ipset binaries at
-# runtime to manipulate the host firewall.
+# Final image is alpine. The default backend needs iptables/ip6tables only
+# for one-time hook management; ban-set hot-path operations use netlink directly.
 
 # ---- builder ----
 FROM golang:1.26-alpine AS builder
@@ -26,12 +26,11 @@ RUN go build -trimpath \
 # ---- runtime ----
 FROM alpine:3.20
 
-# iptables for INPUT/FORWARD rule management, ipset for the O(1) ban-set
-# storage, ip6tables for the ipv6 path.
+# iptables/ip6tables are used only to install and verify INPUT/FORWARD hooks.
+# The ban sets themselves are managed directly over netlink.
 RUN apk add --no-cache \
       iptables \
       ip6tables \
-      ipset \
       ca-certificates \
       tzdata \
  && addgroup -S goban \
@@ -49,16 +48,16 @@ RUN mkdir -p /etc/goban/rules.d \
 RUN mkdir -p /run/goban /var/lib/goban /var/log/goban \
  && chown goban:goban /run/goban
 
-# The daemon must run as root because it shells out to iptables, ip6tables
-# and ipset to manipulate kernel netfilter state. This is an unavoidable
-# architectural requirement shared with fail2ban and every other firewall-
+# The daemon must run as root because it manages kernel netfilter state and,
+# for the default backend, invokes iptables/ip6tables for hook management.
+# This is an unavoidable architectural requirement shared with fail2ban and every other firewall-
 # management daemon — there is no userspace path to managing iptables rules.
 #
 # Mitigations layered on top of this privilege footprint:
 #   - allowlist auto-loads only the host's exact interface addresses so it cannot
 #     accidentally ban its own host;
 #   - the exec runner in internal/banner/iptables.go restricts subprocesses
-#     to a literal-only switch over {ipset, iptables, ip6tables};
+#     to a literal-only switch over {iptables, ip6tables};
 #   - log lines are capped at 16 KiB before regex matching;
 #   - the control socket defaults to mode 0660 with a dedicated goban group.
 #

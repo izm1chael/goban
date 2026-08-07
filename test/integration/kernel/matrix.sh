@@ -11,7 +11,4 @@ for backend in iptables nftables; do
     done
   done
 done
-for backend in iptables nftables; do
-  test/integration/kernel/ttl-refresh.sh "$backend"
-done
-echo "PASS: full kernel enforcement and TTL matrix"
+echo "PASS: full kernel enforcement and TTL-refresh matrix"

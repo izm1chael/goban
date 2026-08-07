@@ -102,9 +102,9 @@ func (b *NFTables) Diagnostics(ctx context.Context) []Diagnostic {
 	if _, err := exec.LookPath("nft"); err != nil {
 		return []Diagnostic{{
 			Name:        "nftables hooks",
-			Status:      "skip",
-			Detail:      "the nft inspection utility is unavailable; set operations remain testable with --probe",
-			Remediation: "install nftables or run test/integration/kernel/run.sh to verify packet-path enforcement",
+			Status:      "warn",
+			Detail:      "the nft inspection utility is unavailable; set operations remain testable with --probe, but packet-path hook drift cannot be independently verified",
+			Remediation: "install the nftables inspection utility or run the privileged packet-path integration test before treating doctor as fully healthy",
 		}}
 	}
 	chains := []string{b.Chain}

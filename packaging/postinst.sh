@@ -15,10 +15,19 @@ if ! getent passwd goban >/dev/null 2>&1; then
             --shell /usr/sbin/nologin --comment "GoBan daemon" goban
 fi
 
-# 2. Make sure systemd sees the new unit. Best-effort — works on systemd
-# hosts, silently no-ops elsewhere.
+# 2. Make sure systemd sees the new unit. A clean install remains stopped,
+# but an already-running daemon is restarted so an upgrade cannot leave the
+# old in-memory binary providing protection indefinitely. A failed restart is
+# a package error rather than a silent downgrade in effective protection.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl is-active --quiet goban.service >/dev/null 2>&1; then
+        if ! systemctl restart goban.service; then
+            echo "GoBan package installed, but the active daemon failed to restart." >&2
+            echo "Inspect: systemctl status goban.service && journalctl -u goban.service" >&2
+            exit 1
+        fi
+    fi
 fi
 
 # 3. Don't auto-enable. Operators have varying opinions on whether a

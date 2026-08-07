@@ -20,18 +20,26 @@ go run ./cmd/goban-corpus fetch --accept-third-party-licenses --root "$CACHE"
 # False positives are a hard gate. Recall is reported, not treated as parity:
 # GoBan deliberately counts terminal security failures rather than every event
 # that Fail2Ban's aggressive filters may count.
+# Each row is file:rule:min-recall. Precision remains the universal hard gate.
+# Recall floors are only set where GoBan intentionally claims compatibility with
+# a terminal authentication-failure family; mode-dependent/aggressive upstream
+# filters remain advisory rather than forcing broader, riskier matching.
 for spec in \
-  'fail2ban-sshd.log:sshd' \
-  'fail2ban-apache-auth.log:apache-auth' \
-  'fail2ban-nginx-http-auth.log:nginx-http-auth' \
-  'fail2ban-postfix.log:postfix-sasl' \
-  'fail2ban-dovecot.log:dovecot' \
-  'fail2ban-vsftpd.log:vsftpd' \
-  'fail2ban-traefik-auth.log:traefik-auth'; do
-  IFS=: read -r file rule <<<"$spec"
+  'fail2ban-sshd.log:sshd:0' \
+  'fail2ban-apache-auth.log:apache-auth:0' \
+  'fail2ban-nginx-http-auth.log:nginx-http-auth:0' \
+  'fail2ban-postfix.log:postfix-sasl:0' \
+  'fail2ban-dovecot.log:dovecot:0.50' \
+  'fail2ban-vsftpd.log:vsftpd:1.0' \
+  'fail2ban-traefik-auth.log:traefik-auth:0'; do
+  IFS=: read -r file rule min_recall <<<"$spec"
   path="$CACHE/$file"
   [[ -f "$path" ]] || { echo "missing fetched source at $path" >&2; exit 1; }
-  go run ./cmd/goban-corpus compat-fail2ban --rule "$rule" --file "$path" --max-false-positive 0
+  args=(compat-fail2ban --rule "$rule" --file "$path" --max-false-positive 0)
+  if [[ "$min_recall" != "0" ]]; then
+    args+=(--min-recall "$min_recall")
+  fi
+  go run ./cmd/goban-corpus "${args[@]}"
 done
 
 go run ./cmd/goban-corpus scan --rule sshd --file "$CACHE/loghub-openssh-2k.log"

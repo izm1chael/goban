@@ -75,6 +75,7 @@ make corpus                curated rule corpus through the production pipeline
 make corpus-generate       deterministic million-line mixed corpus
 make corpus-external       opt-in pinned upstream compatibility corpora
 make package-smoke         build/install deb, rpm, and Arch packages in clean containers
+make package-hooks         verify install/upgrade/remove hook semantics without root
 make test-adoption         migration and setup staging integration tests
 make soak-smoke            short soak lifecycle/report smoke
 make reproducible          byte-compare two clean builds of every binary
@@ -111,7 +112,7 @@ sudo dnf install ./goban-1.0.0-1.x86_64.rpm
 sudo pacman -U ./goban-1.0.0-1-x86_64.pkg.tar.zst
 ```
 
-The package does not start the daemon automatically on first install:
+The package does not start the daemon automatically on first install. Upgrades do restart an already-active GoBan process so the running daemon cannot silently remain on the old binary, and real package removal stops/disables the service before its unit is removed. `iptables` is a weak/recommended dependency for the default backend; the native nftables backend has no mandatory userspace firewall CLI dependency:
 
 ```bash
 sudo editor /etc/goban/goban.yaml
@@ -381,15 +382,11 @@ The active configuration is unchanged when candidate construction, validation, o
 
 Strike state is stored per rule using a semantic fingerprint. Changing a rule's source, regex, timing, allowlist, exclusions, timestamp policy, or trusted-proxy settings prevents incompatible historical strikes from loading into the new rule.
 
-Ban attribution is stored separately so `goban-client list` can retain rule/source context across daemon restarts. Expired kernel entries are pruned from metadata during list/state maintenance.
+Ban attribution is stored separately so `goban-client list` can retain rule/source context across daemon restarts. New metadata explicitly records whether a decision was kernel-enforced or only observed in `dry_run` mode. Unexpired kernel-confirmed decisions are restored with their remaining TTL after a host reboot; legacy metadata is attribution-only and is never replayed because it cannot prove real enforcement. `doctor` warns if an unexpired restorable decision is missing from the kernel backend.
 
 The audit log receives one JSON line for every confirmed automatic or manual ban and every successful manual unban. The bundled `recidive` rule consumes this applied-event stream and automatically excludes its own ban events.
 
-Kernel sets survive a daemon restart but not necessarily a host reboot. The optional `goban-persist.service` saves only GoBan's default ipsets and the default `inet goban` nftables table; it does not dump unrelated firewall sets. Custom set/table names require a matching unit override.
-
-```bash
-sudo systemctl enable --now goban-persist.service
-```
+The optional `goban-persist.service` remains as a legacy/default-name fallback for older metadata and external firewall-state persistence. New GoBan decisions do not require it for reboot restoration. If you enable the legacy helper, it saves only GoBan's default ipsets and the default `inet goban` nftables table; custom set/table names require a matching unit override.
 
 ## Control client
 

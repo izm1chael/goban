@@ -12,6 +12,23 @@ mkdir -p "$OUT"
 } > "$OUT/environment.txt"
 
 go version -m bin/goban-daemon > "$OUT/goban-daemon-buildinfo.txt" 2>/dev/null || true
+expected_version=${VERSION:-}
+{
+  for cmd in goban-daemon goban-client goban-corpus goban-soak; do
+    case "$cmd" in
+      goban-daemon) value=$("bin/$cmd" --version 2>/dev/null || true) ;;
+      *) value=$("bin/$cmd" version 2>/dev/null || true) ;;
+    esac
+    printf '%s=%s\n' "$cmd" "$value"
+    if [[ -n $expected_version && $value != "$expected_version" ]]; then
+      echo "release evidence: $cmd reports '$value', want '$expected_version'" >&2
+      exit 1
+    fi
+  done
+} > "$OUT/binary-versions.txt"
+if [[ -x bin/goban-corpus ]]; then
+  bin/goban-corpus test --json > "$OUT/curated-corpus.json"
+fi
 sha256sum bin/goban-* > "$OUT/SHA256SUMS" 2>/dev/null || true
 cp docs/RELEASE_CHECKLIST.md docs/THREAT_MODEL.md docs/EXTERNAL_REVIEW.md "$OUT/" 2>/dev/null || true
 if [[ -n ${GOBAN_SOAK_RUN:-} ]]; then

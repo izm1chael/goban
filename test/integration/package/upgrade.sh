@@ -26,7 +26,10 @@ docker run --rm \
     grep -q "state-sentinel" /var/lib/goban/operator-state
     grep -q "audit-sentinel" /var/log/goban/operator-audit
     goban-client config validate --config /etc/goban/goban.yaml
-    goban-soak version
+    test "$(goban-daemon --version)" = "1.0.0-rc2"
+    test "$(goban-client version)" = "1.0.0-rc2"
+    test "$(goban-corpus version)" = "1.0.0-rc2"
+    test "$(goban-soak version)" = "1.0.0-rc2"
   '
 
 echo "PASS: Debian upgrade preserves operator configuration and state"

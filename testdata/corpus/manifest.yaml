@@ -1005,6 +1005,51 @@ cases:
   expected_ip: 198.51.100.73
   expected_matches: 5
   expected_bans: 1
+- id: dovecot-info-aborted
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - variant
+  - upstream-compat
+  lines:
+  - '@4000000066b7c00000000000 imap-login: Info: Aborted login (auth failed, 1 attempts): user=<user@example>, method=CRAM-MD5, rip=198.51.100.75, lip=192.0.2.10, TLS'
+  repeat: 5
+  expected_ip: 198.51.100.75
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-auth-worker
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - variant
+  - upstream-compat
+  lines:
+  - 'Jan 29 05:32:50 mail dovecot: auth-worker(304): pam(username,198.51.100.76): pam_authenticate() failed: Authentication failure (password mismatch?)'
+  repeat: 5
+  expected_ip: 198.51.100.76
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-managesieve
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - variant
+  - upstream-compat
+  lines:
+  - 'Jun 13 16:35:56 mx dovecot[241]: managesieve-login: Login aborted: Logged out (auth failed, 1 attempts in 10 secs) (auth_failed): user=<user@domain>, method=PLAIN, rip=198.51.100.77, lip=203.0.113.104, TLS'
+  repeat: 5
+  expected_ip: 198.51.100.77
+  expected_matches: 5
+  expected_bans: 1
 - id: dovecot-success
   service: dovecot
   rule: dovecot
@@ -1259,6 +1304,50 @@ cases:
   expected_ip: 198.51.100.101
   expected_matches: 5
   expected_bans: 1
+- id: vsftpd-fail-login
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://security.appspot.com/vsftpd.html
+  tags:
+  - positive
+  - native
+  - upstream-compat
+  lines:
+  - '2025-03-04T01:06:36.645577 host vsftpd[1658]: [username] FAIL LOGIN: Client "198.51.100.102"'
+  repeat: 5
+  expected_ip: 198.51.100.102
+  expected_matches: 5
+  expected_bans: 1
+- id: vsftpd-fail-login-ipv6
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://security.appspot.com/vsftpd.html
+  tags:
+  - positive
+  - native
+  - ipv6
+  - upstream-compat
+  lines:
+  - '2025-03-04T01:06:37.645577 host vsftpd[1659]: [username] FAIL LOGIN: Client "2001:db8::102"'
+  repeat: 5
+  expected_ip: 2001:db8::102
+  expected_matches: 5
+  expected_bans: 1
+- id: vsftpd-ok-login
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://security.appspot.com/vsftpd.html
+  tags:
+  - negative
+  - success
+  - hard-negative
+  lines:
+  - '2025-03-04T01:06:38.645577 host vsftpd[1660]: [username] OK LOGIN: Client "198.51.100.102"'
+  expected_matches: 0
+  expected_bans: 0
 - id: vsftpd-session-open
   service: vsftpd
   rule: vsftpd

@@ -71,6 +71,11 @@ func (d *Daemon) Doctor(ctx context.Context, req control.DoctorReq) control.Doct
 		} else {
 			add("decision attribution", "pass", "all active decisions have runtime or persisted attribution", "")
 		}
+		if missing := d.missingPersistedBans(bans, time.Now().UTC()); missing > 0 {
+			add("decision persistence", "warn", fmt.Sprintf("%d unexpired persisted decisions are missing from the kernel backend", missing), "restart GoBan to retry restoration and inspect firewall/backend errors; do not assume those specific decisions are enforced")
+		} else {
+			add("decision persistence", "pass", "all restorable persisted decisions are present in the kernel backend", "")
+		}
 	}
 
 	if diagnoser, ok := d.banner.(banner.Diagnoser); ok {

@@ -21,9 +21,13 @@ vendor: izm1chael
 homepage: https://github.com/izm1chael/goban
 license: MIT
 
-depends:
+# GoBan has no mandatory userspace firewall dependency when the native
+# nftables backend is selected. The default iptables backend needs the
+# iptables/ip6tables command only for one-time hook management; ipset hot-path
+# operations use netlink directly. Keep iptables as a weak recommendation so
+# minimal native-nftables installs stay minimal.
+recommends:
   - iptables
-  - ipset
 
 # These are the files the package ships. Paths on the right are install
 # destinations on the user's system.
@@ -92,4 +96,5 @@ contents:
 
 scripts:
   postinstall: ./postinst.sh
+  preremove:   ./prerm.sh
   postremove:  ./postrm.sh

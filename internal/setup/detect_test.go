@@ -36,3 +36,29 @@ func TestDetectFixtureRoot(t *testing.T) {
 		t.Fatalf("expected detected bundles: %#v", plan.EnabledBundles)
 	}
 }
+
+func TestDetectIPTablesDoesNotRequireIPSetUserspaceBinary(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(path, data string) {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(data), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("etc/os-release", "ID=debian\nVERSION_ID=13\n")
+	mustWrite("var/log/auth.log", "")
+	mustWrite("usr/sbin/iptables", "")
+	plan, err := Detect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Facts.IPTables || plan.Facts.IPSet {
+		t.Fatalf("unexpected firewall facts: %#v", plan.Facts)
+	}
+	if plan.Config.Banner.Backend != "iptables" {
+		t.Fatalf("backend=%q, want iptables", plan.Config.Banner.Backend)
+	}
+}

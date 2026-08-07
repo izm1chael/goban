@@ -5,13 +5,13 @@ DAEMON := $(BIN_DIR)/goban-daemon
 CLIENT := $(BIN_DIR)/goban-client
 CORPUS := $(BIN_DIR)/goban-corpus
 SOAK := $(BIN_DIR)/goban-soak
-LDFLAGS := -s -w
 PKGS := ./...
-VERSION ?= 1.0.0
+VERSION ?= dev
+LDFLAGS := -s -w -X main.version=$(VERSION)
 ARCH    ?= amd64
 export ARCH
 
-.PHONY: all build build-journald corpus corpus-generate corpus-external fuzz-short soak-smoke test-adoption reproducible test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
+.PHONY: all build build-journald version-smoke corpus corpus-generate corpus-external fuzz-short soak-smoke test-adoption reproducible test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke package-hooks package-binaries-check docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
 
 all: build
 
@@ -28,6 +28,13 @@ build-journald:
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SOAK) ./cmd/goban-soak
+
+version-smoke:
+	$(MAKE) build VERSION=version-smoke
+	@test "$$($(DAEMON) --version)" = "version-smoke"
+	@test "$$($(CLIENT) version)" = "version-smoke"
+	@test "$$($(CORPUS) version)" = "version-smoke"
+	@test "$$($(SOAK) version)" = "version-smoke"
 
 test:
 	go test $(PKGS)
@@ -55,9 +62,9 @@ lint:
 
 # Non-privileged release gate. Kernel and package verification remain separate
 # because they need root/network namespaces and container/package tooling.
-verify-release: vet test-race corpus reproducible soak-smoke test-adoption
+verify-release: vet test-race corpus reproducible soak-smoke test-adoption version-smoke package-hooks
 	@test -z "$$(gofmt -l cmd internal benchmark)" || { echo "gofmt required:"; gofmt -l cmd internal benchmark; exit 1; }
-	bash -n test/corpus/run.sh test/migration/run.sh test/setup/run.sh test/soak/smoke.sh scripts/reproducible-build.sh scripts/release-evidence.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/kernel/matrix.sh test/integration/reload/run.sh test/integration/package/run.sh test/integration/package/upgrade.sh test/fault/run.sh
+	bash -n test/corpus/run.sh test/migration/run.sh test/setup/run.sh test/soak/smoke.sh scripts/reproducible-build.sh scripts/release-evidence.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/kernel/matrix.sh test/integration/reload/run.sh test/integration/package/run.sh test/integration/package/upgrade.sh test/integration/package/hooks.sh test/fault/run.sh
 	go test -run TestCoreRuleFixtures ./internal/config
 
 soak-smoke: build
@@ -85,6 +92,9 @@ test-kernel: build
 
 package-smoke:
 	test/integration/package/run.sh
+
+package-hooks:
+	test/integration/package/hooks.sh
 
 docker-build:
 	docker build -f deploy/Dockerfile -t goban:latest .
@@ -118,17 +128,31 @@ man:
 # Docker image, or extract the static binary from a Release artifact directly.
 # We still build apk on demand via `make package-apk` so the recipe is
 # preserved for when nfpm/apk-tools alignment improves.
-package: build man package-deb package-rpm package-arch
+package:
+	@test "$(VERSION)" != "dev" || { echo "VERSION must be set for packages (for example: make package VERSION=1.0.0-rc3)" >&2; exit 2; }
+	$(MAKE) build VERSION=$(VERSION)
+	$(MAKE) man
+	$(MAKE) package-deb VERSION=$(VERSION)
+	$(MAKE) package-rpm VERSION=$(VERSION)
+	$(MAKE) package-arch VERSION=$(VERSION)
 
-package-deb:
+package-binaries-check:
+	@test "$(VERSION)" != "dev" || { echo "VERSION must be set for package artifacts" >&2; exit 2; }
+	@test -x "$(DAEMON)" -a -x "$(CLIENT)" -a -x "$(CORPUS)" -a -x "$(SOAK)" || { echo "package binaries are missing; run make build VERSION=$(VERSION)" >&2; exit 2; }
+	@test "$$($(DAEMON) --version)" = "$(VERSION)" || { echo "$(DAEMON) does not report VERSION=$(VERSION)" >&2; exit 2; }
+	@test "$$($(CLIENT) version)" = "$(VERSION)" || { echo "$(CLIENT) does not report VERSION=$(VERSION)" >&2; exit 2; }
+	@test "$$($(CORPUS) version)" = "$(VERSION)" || { echo "$(CORPUS) does not report VERSION=$(VERSION)" >&2; exit 2; }
+	@test "$$($(SOAK) version)" = "$(VERSION)" || { echo "$(SOAK) does not report VERSION=$(VERSION)" >&2; exit 2; }
+
+package-deb: package-binaries-check
 	@mkdir -p $(DIST_DIR)
 	cd packaging && VERSION=$(VERSION) nfpm pkg --packager deb --config nfpm.yaml --target ../$(DIST_DIR)/
 
-package-rpm:
+package-rpm: package-binaries-check
 	@mkdir -p $(DIST_DIR)
 	cd packaging && VERSION=$(VERSION) nfpm pkg --packager rpm --config nfpm.yaml --target ../$(DIST_DIR)/
 
-package-apk:
+package-apk: package-binaries-check
 	@mkdir -p $(DIST_DIR)
 	cd packaging && VERSION=$(VERSION) nfpm pkg --packager apk --config nfpm.yaml --target ../$(DIST_DIR)/
 
@@ -136,6 +160,6 @@ package-apk:
 # required at build time. Maintainers who want this in AUR can still wrap the
 # package in a PKGBUILD that just downloads + repackages, but for users who
 # `pacman -U` the artifact directly this is the simplest path.
-package-arch:
+package-arch: package-binaries-check
 	@mkdir -p $(DIST_DIR)
 	cd packaging && VERSION=$(VERSION) nfpm pkg --packager archlinux --config nfpm.yaml --target ../$(DIST_DIR)/
