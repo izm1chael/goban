@@ -19,12 +19,17 @@ Detection covers:
 - common OpenSSH, Nginx, Apache, and mail log locations.
 
 The command does not start services, insert firewall rules, or overwrite the
-live configuration. The staged configuration always begins with
-`dry_run: true`.
+live configuration. The staged configuration always begins with `dry_run: true`. On systemd hosts
+it also proposes `enforcer.mode: split`, matching the packaged zero-capability
+detector + privileged-helper architecture.
 
 Review all warnings. In particular, Docker application rules require explicit
 container names or labels and reverse-proxy rules require trusted-proxy
-configuration. Auto-detection cannot safely infer those security boundaries.
+configuration. In split mode the package does not grant `goban` access to
+`docker.sock`; Docker-group access is effectively root-equivalent and must be a
+deliberate operator choice. Custom root-only log paths also need narrow read
+permissions for the unprivileged detector. Auto-detection cannot safely infer
+those security boundaries.
 
 Validate the proposal before copying it:
 

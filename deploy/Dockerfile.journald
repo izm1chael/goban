@@ -19,6 +19,9 @@ COPY examples/goban.yaml /etc/goban/goban.yaml
 COPY examples/rules.d /usr/share/goban/rules-available
 RUN cp /usr/share/goban/rules-available/sshd.yaml /etc/goban/rules.d/ \
  && cp /usr/share/goban/rules-available/recidive.yaml /etc/goban/rules.d/
+# The journald image is also a single-container direct-mode compatibility
+# deployment. It requires host firewall capability; native systemd packages
+# privilege-separate parsing from enforcement.
 USER root
 ENTRYPOINT ["/usr/local/bin/goban-daemon"]
 CMD ["--config", "/etc/goban/goban.yaml"]

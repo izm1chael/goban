@@ -43,6 +43,13 @@ type Diagnoser interface {
 	Diagnostics(ctx context.Context) []Diagnostic
 }
 
+// PolicyReloader is implemented by split-mode backends whose privileged
+// safety policy is loaded independently from root-managed configuration.
+// expectedFingerprint proves both sides resolved the same allowlist semantics.
+type PolicyReloader interface {
+	ReloadPolicy(ctx context.Context, expectedFingerprint string) error
+}
+
 // Banner manages the runtime ban set.
 //
 // Setup is invoked once at daemon start and must be idempotent — repeated

@@ -19,10 +19,22 @@ docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_deb:/tmp/goban.deb:ro" d
   apt-get update -qq
   apt-get install -y /tmp/goban.deb
   test "$(goban-daemon --version)" = "$EXPECTED_VERSION"
+  test "$(goban-enforcer --version)" = "$EXPECTED_VERSION"
   test "$(goban-client version)" = "$EXPECTED_VERSION"
   test "$(goban-corpus version)" = "$EXPECTED_VERSION"
   test "$(goban-soak version)" = "$EXPECTED_VERSION"
   goban-client config validate --config /etc/goban/goban.yaml
+  test -f /usr/lib/systemd/system/goban-enforcer.service
+  id goban
+  id goban-enforcer
+  grep -qx "User=goban" /usr/lib/systemd/system/goban.service
+  grep -qx "User=goban-enforcer" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "Group=goban" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "AmbientCapabilities=CAP_NET_ADMIN" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "CapabilityBoundingSet=CAP_NET_ADMIN" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "PartOf=goban.service" /usr/lib/systemd/system/goban-enforcer.service
+  ! grep -q '^\[Install\]' /usr/lib/systemd/system/goban-enforcer.service
+  test "$(stat -c %G /etc/goban)" = goban
   test -f /usr/share/goban/rules-available/sshd.yaml
   test -f /etc/goban/rules.d/sshd.yaml
   test -f /etc/goban/rules.d/recidive.yaml
@@ -32,10 +44,22 @@ docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_deb:/tmp/goban.deb:ro" d
 docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_rpm:/tmp/goban.rpm:ro" rockylinux:9 bash -euxc '
   dnf install -y /tmp/goban.rpm
   test "$(goban-daemon --version)" = "$EXPECTED_VERSION"
+  test "$(goban-enforcer --version)" = "$EXPECTED_VERSION"
   test "$(goban-client version)" = "$EXPECTED_VERSION"
   test "$(goban-corpus version)" = "$EXPECTED_VERSION"
   test "$(goban-soak version)" = "$EXPECTED_VERSION"
   goban-client config validate --config /etc/goban/goban.yaml
+  test -f /usr/lib/systemd/system/goban-enforcer.service
+  id goban
+  id goban-enforcer
+  grep -qx "User=goban" /usr/lib/systemd/system/goban.service
+  grep -qx "User=goban-enforcer" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "Group=goban" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "AmbientCapabilities=CAP_NET_ADMIN" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "CapabilityBoundingSet=CAP_NET_ADMIN" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "PartOf=goban.service" /usr/lib/systemd/system/goban-enforcer.service
+  ! grep -q '^\[Install\]' /usr/lib/systemd/system/goban-enforcer.service
+  test "$(stat -c %G /etc/goban)" = goban
   test -f /usr/share/goban/rules-available/sshd.yaml
   test -f /etc/goban/rules.d/sshd.yaml
 '
@@ -44,10 +68,22 @@ docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_arch:/tmp/goban.pkg.tar.
   pacman -Sy --noconfirm
   pacman -U --noconfirm /tmp/goban.pkg.tar.zst
   test "$(goban-daemon --version)" = "$EXPECTED_VERSION"
+  test "$(goban-enforcer --version)" = "$EXPECTED_VERSION"
   test "$(goban-client version)" = "$EXPECTED_VERSION"
   test "$(goban-corpus version)" = "$EXPECTED_VERSION"
   test "$(goban-soak version)" = "$EXPECTED_VERSION"
   goban-client config validate --config /etc/goban/goban.yaml
+  test -f /usr/lib/systemd/system/goban-enforcer.service
+  id goban
+  id goban-enforcer
+  grep -qx "User=goban" /usr/lib/systemd/system/goban.service
+  grep -qx "User=goban-enforcer" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "Group=goban" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "AmbientCapabilities=CAP_NET_ADMIN" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "CapabilityBoundingSet=CAP_NET_ADMIN" /usr/lib/systemd/system/goban-enforcer.service
+  grep -qx "PartOf=goban.service" /usr/lib/systemd/system/goban-enforcer.service
+  ! grep -q '^\[Install\]' /usr/lib/systemd/system/goban-enforcer.service
+  test "$(stat -c %G /etc/goban)" = goban
   test -f /usr/share/goban/rules-available/sshd.yaml
   test -f /etc/goban/rules.d/sshd.yaml
 '

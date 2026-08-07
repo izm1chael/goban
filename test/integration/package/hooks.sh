@@ -19,6 +19,16 @@ cat > "$MOCKBIN/useradd" <<'SH'
 #!/bin/sh
 exit 0
 SH
+cat > "$MOCKBIN/usermod" <<'SH'
+#!/bin/sh
+exit 0
+SH
+for tool in chgrp chmod chown; do
+cat > "$MOCKBIN/$tool" <<'SH'
+#!/bin/sh
+exit 0
+SH
+done
 cat > "$MOCKBIN/systemctl" <<'SH'
 #!/bin/sh
 : "${MOCK_SYSTEMCTL_LOG:?}"
@@ -46,6 +56,7 @@ grep -Fxq 'daemon-reload' "$LOG"
 : > "$LOG"
 MOCK_ACTIVE=yes run_hook "$ROOT_DIR/packaging/postinst.sh" >/dev/null
 grep -Fxq 'restart goban.service' "$LOG"
+! grep -Fxq 'restart goban-enforcer.service' "$LOG"
 
 : > "$LOG"
 run_hook "$ROOT_DIR/packaging/prerm.sh" upgrade
@@ -58,11 +69,13 @@ run_hook "$ROOT_DIR/packaging/prerm.sh" 1
 : > "$LOG"
 run_hook "$ROOT_DIR/packaging/prerm.sh" remove
 grep -Fxq 'disable --now goban.service' "$LOG"
+grep -Fxq 'disable --now goban-enforcer.service' "$LOG"
 grep -Fxq 'disable --now goban-persist.service' "$LOG"
 
 : > "$LOG"
 run_hook "$ROOT_DIR/packaging/prerm.sh" 0
 grep -Fxq 'disable --now goban.service' "$LOG"
+grep -Fxq 'disable --now goban-enforcer.service' "$LOG"
 
 : > "$LOG"
 upgrade_output=$(run_hook "$ROOT_DIR/packaging/postrm.sh" upgrade)
@@ -78,5 +91,15 @@ MOCK_ACTIVE=yes MOCK_RESTART_FAIL=yes run_hook "$ROOT_DIR/packaging/postinst.sh"
 rc=$?
 set -e
 [[ $rc -ne 0 ]] || { echo 'postinst must fail when an active daemon cannot restart' >&2; exit 1; }
+
+grep -Fxq 'User=goban' "$ROOT_DIR/deploy/goban.service"
+grep -Fxq 'CapabilityBoundingSet=' "$ROOT_DIR/deploy/goban.service"
+grep -Fq -- '--enforcer-mode=split' "$ROOT_DIR/deploy/goban.service"
+grep -Fxq 'Requires=goban-enforcer.service' "$ROOT_DIR/deploy/goban.service"
+grep -Fxq 'PartOf=goban.service' "$ROOT_DIR/deploy/goban-enforcer.service"
+grep -Fxq 'User=goban-enforcer' "$ROOT_DIR/deploy/goban-enforcer.service"
+grep -Fxq 'Group=goban' "$ROOT_DIR/deploy/goban-enforcer.service"
+grep -Fxq 'AmbientCapabilities=CAP_NET_ADMIN' "$ROOT_DIR/deploy/goban-enforcer.service"
+grep -Fxq 'CapabilityBoundingSet=CAP_NET_ADMIN' "$ROOT_DIR/deploy/goban-enforcer.service"
 
 echo 'PASS: package lifecycle hooks preserve upgrades and stop real removals'

@@ -211,3 +211,38 @@ func TestLoadRulesRejectsMultipleDocuments(t *testing.T) {
 		t.Fatal("expected multiple-document rules YAML error")
 	}
 }
+
+func TestEnforcerConfigValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sources = []SourceConfig{{Type: "file", Name: "auth", Path: "/tmp/auth.log"}}
+	cfg.Rules = []RuleConfig{{Name: "sshd", Source: "auth", Regex: `(?P<ip>192\\.0\\.2\\.1)`, MaxRetries: 1, FindTime: time.Minute, BanTime: time.Minute}}
+	cfg.Enforcer.Mode = "split"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid split enforcer rejected: %v", err)
+	}
+	cfg.Enforcer.SocketPath = "relative.sock"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("relative enforcer socket should be rejected")
+	}
+	cfg.Enforcer.SocketPath = "/run/goban-enforcer/enforcer.sock"
+	cfg.Enforcer.Mode = "magic"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("unknown enforcer mode should be rejected")
+	}
+}
+
+func TestEnforcementPolicyFingerprintIsSemantic(t *testing.T) {
+	a := DefaultConfig()
+	a.Allowlist = []string{"198.51.100.0/24", "203.0.113.7/32"}
+	a.Rules = []RuleConfig{{Name: "ssh", Allowlist: []string{"192.0.2.0/24"}}}
+	b := DefaultConfig()
+	b.Allowlist = []string{"203.0.113.7/32", "198.51.100.42/24", "198.51.100.0/24"}
+	b.Rules = []RuleConfig{{Name: "ssh", Allowlist: []string{"192.0.2.99/24"}}}
+	if EnforcementPolicyFingerprint(a) != EnforcementPolicyFingerprint(b) {
+		t.Fatal("equivalent CIDR policy should have the same fingerprint")
+	}
+	b.Rules[0].Allowlist = []string{"192.0.3.0/24"}
+	if EnforcementPolicyFingerprint(a) == EnforcementPolicyFingerprint(b) {
+		t.Fatal("policy change must change fingerprint")
+	}
+}

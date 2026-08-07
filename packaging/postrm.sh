@@ -23,7 +23,7 @@ The following are intentionally NOT deleted:
   /etc/goban/            — your config and rule bundles
   /var/lib/goban/        — persisted strike state
   /var/log/goban/        — audit log
-  goban system user/group
+  goban and goban-enforcer system identities
   Existing GoBan kernel ban entries (until expiry, firewall reset, or reboot)
 
 To purge everything:
@@ -31,6 +31,7 @@ To purge everything:
   sudo ipset destroy goban-ban-v4 2>/dev/null || true
   sudo ipset destroy goban-ban-v6 2>/dev/null || true
   sudo nft delete table inet goban 2>/dev/null || true
+  sudo userdel goban-enforcer 2>/dev/null || true
   sudo userdel goban && sudo groupdel goban
 EOF
 

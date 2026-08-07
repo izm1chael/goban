@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/izm1chael/goban/internal/banner"
 	"github.com/izm1chael/goban/internal/config"
 	"github.com/izm1chael/goban/internal/source"
 )
@@ -131,6 +132,32 @@ func (d *Daemon) Reload(requestCtx context.Context) error {
 	}
 	if err := drainReloadSources(d.rootCtx, oldSources); err != nil {
 		d.log.Warn().Err(err).Msg("source drain incomplete before reload cutover")
+	}
+
+	// Split mode maintains an independent allowlist policy in the privileged
+	// helper. Refresh it only after every candidate source has started, but
+	// before the old consumers are cancelled. If root-side policy loading or
+	// fingerprint verification fails, the old graph is still fully alive and
+	// this reload can abort without a protection gap. Rebuild the helper policy
+	// on every reload: exact local-interface protections can change because of
+	// DHCP, IPv6 privacy addresses, or interface changes without changing YAML.
+	if reloader, ok := d.banner.(banner.PolicyReloader); newCfg.Enforcer.Mode == "split" && ok {
+		newPolicy := config.EnforcementPolicyFingerprint(newCfg)
+		policyCtx, cancel := context.WithTimeout(d.rootCtx, 8*time.Second)
+		err := reloader.ReloadPolicy(policyCtx, newPolicy)
+		cancel()
+		if err != nil {
+			for _, oldRI := range oldRules {
+				oldRI.endCutoverRecording()
+			}
+			for _, startedName := range started {
+				_ = candidateSources[startedName].src.Close()
+			}
+			d.cleanupPrepared(prepared, candidateRules, candidateSources)
+			closeSourceGraph(candidateSources)
+			d.mu.Unlock()
+			return fmt.Errorf("reload privileged enforcement policy: %w", err)
+		}
 	}
 
 	// Candidate startup succeeded. Pause the old consumers only now, after
@@ -351,6 +378,9 @@ func applyRuntimeOverrides(cfg *config.Config, overrides RuntimeOverrides) {
 	}
 	if overrides.LogFile != "" {
 		cfg.LogFile = overrides.LogFile
+	}
+	if overrides.EnforcerMode != "" {
+		cfg.Enforcer.Mode = overrides.EnforcerMode
 	}
 }
 

@@ -63,6 +63,14 @@ func (b *BatchedBanner) Diagnostics(ctx context.Context) []Diagnostic {
 	return []Diagnostic{{Name: "firewall hooks", Status: "skip", Detail: "backend does not expose hook diagnostics"}}
 }
 
+func (b *BatchedBanner) ReloadPolicy(ctx context.Context, expectedFingerprint string) error {
+	r, ok := b.inner.(PolicyReloader)
+	if !ok {
+		return nil
+	}
+	return r.ReloadPolicy(ctx, expectedFingerprint)
+}
+
 func (b *BatchedBanner) Ban(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
 	q := queuedBan{
 		req:    BanRequest{IP: ip, Rule: rule, TTL: ttl},

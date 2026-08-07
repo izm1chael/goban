@@ -18,6 +18,7 @@ type StatusResp struct {
 	MemoryBytes     uint64    `json:"memory_bytes"`
 	Goroutines      int       `json:"goroutines"`
 	BannerError     string    `json:"banner_error,omitempty"`
+	EnforcementMode string    `json:"enforcement_mode,omitempty"`
 }
 
 // SourceInfo is one entry in GET /sources.

@@ -39,7 +39,9 @@ best-effort guess for protection.
      --rules-dir /root/goban-migration/rules.d
    ```
 
-3. Run GoBan with `dry_run: true` while Fail2Ban remains the sole enforcer.
+3. On native systemd packages, keep the packaged split mode so the GoBan
+   detector remains unprivileged. Run GoBan with `dry_run: true` while Fail2Ban
+   remains the sole enforcer.
 4. Compare GoBan matches with Fail2Ban decisions and investigate differences.
 5. Confirm `goban-client doctor` is healthy. Use `--probe` only on a controlled
    host where temporary test-set modification is acceptable.
@@ -61,3 +63,11 @@ ambiguous.
   purpose is not temporary IP enforcement is outside the migration scope.
 - Fail2Ban configuration precedence is approximated in documented order:
   `jail.conf`, `jail.d/*.conf`, `jail.local`, then `jail.d/*.local`.
+
+## Privilege change from typical Fail2Ban deployments
+
+Native GoBan packages intentionally do not run the log parser as root. If a
+Fail2Ban jail currently reads a root-only file, migration may need a narrow file
+ACL/group change or the journald-enabled GoBan build. `goban-client sources`
+and `doctor` must be healthy before cutover. Do not grant broad filesystem
+capabilities merely to reproduce a root-running legacy layout.

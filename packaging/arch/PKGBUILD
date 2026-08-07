@@ -34,6 +34,7 @@ build() {
     cd "${srcdir}/local"
     export CGO_ENABLED=0
     go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-daemon ./cmd/goban-daemon
+    go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-enforcer ./cmd/goban-enforcer
     go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-client ./cmd/goban-client
     go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-corpus ./cmd/goban-corpus
     go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o goban-soak ./cmd/goban-soak
@@ -42,10 +43,12 @@ build() {
 package() {
     cd "${srcdir}/local"
     install -Dm755 goban-daemon "${pkgdir}/usr/bin/goban-daemon"
+    install -Dm755 goban-enforcer "${pkgdir}/usr/bin/goban-enforcer"
     install -Dm755 goban-client "${pkgdir}/usr/bin/goban-client"
     install -Dm755 goban-corpus "${pkgdir}/usr/bin/goban-corpus"
     install -Dm755 goban-soak "${pkgdir}/usr/bin/goban-soak"
     install -Dm644 deploy/goban.service "${pkgdir}/usr/lib/systemd/system/goban.service"
+    install -Dm644 deploy/goban-enforcer.service "${pkgdir}/usr/lib/systemd/system/goban-enforcer.service"
     install -Dm644 deploy/goban-persist.service "${pkgdir}/usr/lib/systemd/system/goban-persist.service"
     install -Dm640 examples/goban.yaml "${pkgdir}/etc/goban/goban.yaml"
     install -d "${pkgdir}/etc/goban/rules.d" "${pkgdir}/usr/share/goban/rules-available"

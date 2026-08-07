@@ -1,0 +1,38 @@
+[Unit]
+Description=GoBan privileged firewall enforcer
+Documentation=https://github.com/izm1chael/goban
+After=network-online.target
+Wants=network-online.target
+PartOf=goban.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/goban-enforcer --config /etc/goban/goban.yaml
+Restart=on-failure
+RestartSec=3s
+
+# The helper is intentionally non-root and is the only packaged process with
+# firewall power. Its primary group is goban so the detector can reach the
+# 0660 socket; SO_PEERCRED still admits only the exact detector UID (or root).
+User=goban-enforcer
+Group=goban
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+
+RuntimeDirectory=goban-enforcer
+RuntimeDirectoryMode=0750
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/goban
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6

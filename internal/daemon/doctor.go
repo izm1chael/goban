@@ -13,6 +13,8 @@ import (
 
 	"github.com/izm1chael/goban/internal/banner"
 	"github.com/izm1chael/goban/internal/control"
+	"github.com/izm1chael/goban/internal/privilege"
+	"github.com/izm1chael/goban/internal/procinfo"
 )
 
 // Doctor verifies the live daemon rather than merely validating YAML. The
@@ -39,6 +41,18 @@ func (d *Daemon) Doctor(ctx context.Context, req control.DoctorReq) control.Doct
 		add("enforcement mode", "fail", "dry_run is enabled; GoBan is observing but cannot block traffic", "set dry_run: false and restart after verifying the firewall backend")
 	} else {
 		add("enforcement mode", "pass", "kernel enforcement is enabled", "")
+	}
+	if !cfg.DryRun && cfg.Enforcer.Mode == "split" {
+		proc, err := procinfo.ReadSelf()
+		if err != nil {
+			add("detector privilege boundary", "fail", "cannot verify detector privilege state from /proc: "+err.Error(), "run the packaged Linux systemd service and ensure /proc is readable")
+		} else if err := privilege.ValidateDetector(proc); err != nil {
+			add("detector privilege boundary", "fail", fmt.Sprintf("uid=%d gid=%d CapEff=%s CapBnd=%s CapAmb=%s NoNewPrivs=%t: %v", proc.UID, proc.GID, proc.CapEff, proc.CapBnd, proc.CapAmb, proc.NoNewPrivs, err), "use the packaged goban.service and remove manual/root execution or added capabilities")
+		} else {
+			add("detector privilege boundary", "pass", fmt.Sprintf("uid=%d with zero effective/bounding/ambient capabilities and NoNewPrivileges", proc.UID), "")
+		}
+	} else if !cfg.DryRun {
+		add("privilege separation", "skip", "direct compatibility mode keeps firewall privileges in goban-daemon", "packaged systemd installs use --enforcer-mode=split; use direct only when a separate helper is unsuitable")
 	}
 
 	listCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

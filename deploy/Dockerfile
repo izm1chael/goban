@@ -48,21 +48,14 @@ RUN mkdir -p /etc/goban/rules.d \
 RUN mkdir -p /run/goban /var/lib/goban /var/log/goban \
  && chown goban:goban /run/goban
 
-# The daemon must run as root because it manages kernel netfilter state and,
-# for the default backend, invokes iptables/ip6tables for hook management.
-# This is an unavoidable architectural requirement shared with fail2ban and every other firewall-
-# management daemon — there is no userspace path to managing iptables rules.
+# This single-container image intentionally uses GoBan's direct compatibility
+# mode: one process both parses logs and manages host netfilter state. Native
+# systemd packages use the stronger split architecture, where goban-daemon is
+# unprivileged and goban-enforcer alone retains firewall capability. Keeping
+# the container single-process avoids requiring a second host-namespace helper
+# and a shared privileged socket merely to run the image.
 #
-# Mitigations layered on top of this privilege footprint:
-#   - allowlist auto-loads only the host's exact interface addresses so it cannot
-#     accidentally ban its own host;
-#   - the exec runner in internal/banner/iptables.go restricts subprocesses
-#     to a literal-only switch over {iptables, ip6tables};
-#   - log lines are capped at 16 KiB before regex matching;
-#   - the control socket defaults to mode 0660 with a dedicated goban group.
-#
-# When running inside a container, also add NET_ADMIN+NET_RAW capabilities
-# and use --network host so the rules reach the host kernel:
+# Direct mode therefore still requires NET_ADMIN+NET_RAW and host networking:
 #
 #   docker run --rm --network host \
 #     --cap-add NET_ADMIN --cap-add NET_RAW \
@@ -71,6 +64,10 @@ RUN mkdir -p /run/goban /var/lib/goban /var/log/goban \
 #     -v /etc/goban:/etc/goban:ro \
 #     -v /run/goban:/run/goban \
 #     goban:latest
+#
+# Mount docker.sock only when Docker log sources are required; access to that
+# socket is itself effectively root-equivalent. For the smallest privilege
+# footprint on a native Linux host, prefer the packaged systemd split mode.
 
 # nosemgrep: dockerfile.security.last-user-is-root.last-user-is-root
 USER root

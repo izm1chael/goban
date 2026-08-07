@@ -9,8 +9,11 @@ goban-daemon \- supervised log watcher and confirmed kernel IP banner
 .B goban-daemon
 watches file, Docker, or systemd-journal sources for authentication and
 application abuse. Rules extract an IP address with a named regular-expression
-capture, count strikes in a sliding time window, and apply a timeout-bearing
-kernel ban through iptables+ipset or native nftables.
+capture, count strikes in a sliding time window, and request a timeout-bearing
+kernel ban through iptables+ipset or native nftables. In packaged systemd
+deployments firewall mutation is delegated to the separate privileged
+.BR goban-enforcer (8)
+process; the daemon itself runs unprivileged.
 .PP
 A ban is counted, audited, and removed from strike state only after the
 firewall backend confirms it. Source lifecycle, reconnects, queue drops, and
@@ -25,6 +28,11 @@ Path to the strict YAML configuration file (default
 .BR \-rules-dir " " \fIDIR\fR
 Override the configured enabled-rule directory. Every *.yaml and *.yml file
 is decoded strictly and merged at startup/reload.
+.TP
+.BR \-enforcer-mode " " \fIMODE\fR
+Runtime enforcement override: direct or split. Packaged systemd units force
+split mode so upgrades from older configuration files remain privilege
+separated. Direct mode is retained for standalone/container compatibility.
 .TP
 .BR \-version
 Print version and exit.
@@ -111,10 +119,11 @@ A rule that extracts a forwarded client IP should also configure
 trusted_proxy_capture and trusted_proxies. The forwarded IP is rejected unless
 the captured direct peer belongs to an allowed proxy CIDR.
 .SH PERSISTENCE
-Strike state does not recreate kernel bans. Kernel sets survive a daemon
-restart but are normally lost at host reboot. The optional goban-persist.service
-saves only GoBan's default ipsets and default nftables table; custom names need
-a unit override.
+Kernel-confirmed decision metadata can restore unexpired bans after a host
+reboot with their remaining TTL. Dry-run observations and legacy metadata that
+cannot prove enforcement are never replayed. The optional goban-persist.service
+can additionally persist default kernel sets across reboot; custom names need a
+unit override.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -126,12 +135,15 @@ Startup/runtime failure.
 Selected GOBAN_* variables overlay YAML before rule-directory loading and
 final default application. See README.md for the supported list.
 .SH CAPABILITIES
-The daemon requires CAP_NET_ADMIN. Docker log sources additionally require
-access to the Docker socket. Journald support requires a journald-tagged build.
-The shipped systemd unit bounds capabilities and applies filesystem and kernel
-hardening.
+Packaged systemd deployments run the daemon as User=goban with an empty
+effective capability set. goban-enforcer alone retains bounded firewall
+capabilities and authenticates the daemon over a private Unix socket. Direct
+mode requires the daemon itself to hold the firewall capabilities. Docker log
+sources additionally require access to the Docker socket, which is effectively
+root-equivalent. Journald support requires a journald-tagged build.
 .SH SEE ALSO
 .BR goban-client (1),
+.BR goban-enforcer (8),
 .BR iptables (8),
 .BR ipset (8),
 .BR nft (8)

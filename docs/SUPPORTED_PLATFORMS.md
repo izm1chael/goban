@@ -15,6 +15,7 @@ platform supported.
 | Address family | IPv4 and IPv6 |
 | Sources | file, systemd journal build, Docker logs |
 | Service packs | reviewed core bundles with corpus fixtures |
+| Native privilege model | zero-capability detector + separate non-root CAP_NET_ADMIN helper under systemd |
 
 A distribution version should be named as supported only after a fresh install,
 upgrade-preservation test, service lifecycle test, `doctor --probe`, and an
@@ -22,3 +23,12 @@ appropriate soak have passed on that version.
 
 Windows, macOS, Kubernetes operators, cloud firewall APIs, and eBPF/XDP are not
 part of the 1.0 support contract.
+
+## Privilege model note
+
+Native systemd packages are supported only when the distribution can run the
+detector as the dedicated `goban` account and provide read access to configured
+logs without restoring broad root capabilities. The single-container image is a
+documented direct-mode compatibility deployment and has a larger privilege
+footprint. Docker-socket sources are treated separately because Docker daemon
+access is root-equivalent.

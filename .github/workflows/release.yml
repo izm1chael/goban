@@ -94,6 +94,9 @@ jobs:
             -o bin/goban-daemon ./cmd/goban-daemon
           CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
             go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
+            -o bin/goban-enforcer ./cmd/goban-enforcer
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
+            go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
             -o bin/goban-client ./cmd/goban-client
           CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" \
             go build -trimpath -ldflags="-s -w -X main.version=$VERSION" \
@@ -107,6 +110,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           test "$(bin/goban-daemon --version)" = "$VERSION"
+          test "$(bin/goban-enforcer --version)" = "$VERSION"
           test "$(bin/goban-client version)" = "$VERSION"
           test "$(bin/goban-corpus version)" = "$VERSION"
           test "$(bin/goban-soak version)" = "$VERSION"
@@ -124,6 +128,7 @@ jobs:
       - name: Gzip man pages (nfpm reads them from man/*.gz)
         run: |
           gzip -fk man/goban-daemon.8
+          gzip -fk man/goban-enforcer.8
           gzip -fk man/goban-client.1
           gzip -fk man/goban-soak.1
           ls -lh man/
@@ -152,6 +157,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           mv bin/goban-daemon "bin/goban-daemon-linux-$ARCH"
+          mv bin/goban-enforcer "bin/goban-enforcer-linux-$ARCH"
           mv bin/goban-client "bin/goban-client-linux-$ARCH"
           mv bin/goban-corpus "bin/goban-corpus-linux-$ARCH"
           mv bin/goban-soak "bin/goban-soak-linux-$ARCH"
@@ -162,6 +168,7 @@ jobs:
           path: |
             dist/
             bin/goban-daemon-linux-${{ matrix.arch }}
+            bin/goban-enforcer-linux-${{ matrix.arch }}
             bin/goban-client-linux-${{ matrix.arch }}
             bin/goban-corpus-linux-${{ matrix.arch }}
             bin/goban-soak-linux-${{ matrix.arch }}

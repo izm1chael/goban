@@ -1,8 +1,10 @@
 # Release artifacts and provenance
 
-Tagged releases build static linux/amd64 and linux/arm64 binaries, Debian/RPM/
-Arch packages, and a multi-architecture container image. The release workflow
-also produces:
+Tagged releases build static linux/amd64 and linux/arm64 binaries for the
+detector, enforcer, client, corpus, and soak tools; Debian/RPM/Arch packages;
+and a multi-architecture container image. Native packages use privilege
+separation, while the current single-container image remains the documented
+direct-mode compatibility deployment. The release workflow also produces:
 
 - SHA-256 checksums;
 - SPDX JSON software bills of materials;

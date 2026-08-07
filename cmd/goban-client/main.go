@@ -259,6 +259,9 @@ func doStatus(ctx context.Context, c *control.Client, asJSON bool) error {
 	fmt.Printf("dropped:    %d lines\n", st.DroppedLines)
 	fmt.Printf("memory:     %d bytes\n", st.MemoryBytes)
 	fmt.Printf("goroutines: %d\n", st.Goroutines)
+	if st.EnforcementMode != "" {
+		fmt.Printf("enforcement: %s\n", st.EnforcementMode)
+	}
 	if st.BannerError != "" {
 		fmt.Printf("banner:     ERROR: %s\n", st.BannerError)
 	}

@@ -1,22 +1,26 @@
 [Unit]
-Description=GoBan log watcher and IP banner
+Description=GoBan log watcher and decision engine
 Documentation=https://github.com/izm1chael/goban
-After=network-online.target
+After=network-online.target goban-enforcer.service
 Wants=network-online.target
+Requires=goban-enforcer.service
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/goban-daemon --config /etc/goban/goban.yaml
+ExecStart=/usr/bin/goban-daemon --config /etc/goban/goban.yaml --enforcer-mode=split
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 
-# Capabilities — drop everything except what the banner needs.
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_CHOWN
+# Packaged deployments privilege-separate by default. This process parses
+# attacker-controlled logs and evaluates rules but has no firewall capability.
+User=goban
+Group=goban
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=true
 
-# systemd-managed directories with the right permissions.
-# These create /run/goban, /var/lib/goban, /var/log/goban automatically.
+# systemd-managed directories are owned by User=goban.
 RuntimeDirectory=goban
 RuntimeDirectoryMode=0755
 StateDirectory=goban
@@ -24,15 +28,11 @@ StateDirectoryMode=0700
 LogsDirectory=goban
 LogsDirectoryMode=0750
 
-# Filesystem hardening
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-NoNewPrivileges=true
 ReadWritePaths=/run/goban /var/lib/goban /var/log/goban
 ReadOnlyPaths=/etc/goban
-
-# Namespacing
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
@@ -41,6 +41,7 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 RestrictNamespaces=true
 SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

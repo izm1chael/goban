@@ -14,9 +14,9 @@ mkdir -p "$OUT"
 go version -m bin/goban-daemon > "$OUT/goban-daemon-buildinfo.txt" 2>/dev/null || true
 expected_version=${VERSION:-}
 {
-  for cmd in goban-daemon goban-client goban-corpus goban-soak; do
+  for cmd in goban-daemon goban-enforcer goban-client goban-corpus goban-soak; do
     case "$cmd" in
-      goban-daemon) value=$("bin/$cmd" --version 2>/dev/null || true) ;;
+      goban-daemon|goban-enforcer) value=$("bin/$cmd" --version 2>/dev/null || true) ;;
       *) value=$("bin/$cmd" version 2>/dev/null || true) ;;
     esac
     printf '%s=%s\n' "$cmd" "$value"
@@ -30,7 +30,7 @@ if [[ -x bin/goban-corpus ]]; then
   bin/goban-corpus test --json > "$OUT/curated-corpus.json"
 fi
 sha256sum bin/goban-* > "$OUT/SHA256SUMS" 2>/dev/null || true
-cp docs/RELEASE_CHECKLIST.md docs/THREAT_MODEL.md docs/EXTERNAL_REVIEW.md "$OUT/" 2>/dev/null || true
+cp docs/RELEASE_CHECKLIST.md docs/THREAT_MODEL.md docs/PRIVILEGE_SEPARATION.md docs/EXTERNAL_REVIEW.md "$OUT/" 2>/dev/null || true
 if [[ -n ${GOBAN_SOAK_RUN:-} ]]; then
   cp "$GOBAN_SOAK_RUN"/report.json "$GOBAN_SOAK_RUN"/report.md "$OUT/" 2>/dev/null || {
     echo "GOBAN_SOAK_RUN did not contain report.json/report.md" >&2

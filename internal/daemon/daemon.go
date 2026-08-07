@@ -20,6 +20,7 @@ import (
 	"github.com/izm1chael/goban/internal/banner"
 	"github.com/izm1chael/goban/internal/config"
 	"github.com/izm1chael/goban/internal/control"
+	"github.com/izm1chael/goban/internal/firewall"
 	"github.com/izm1chael/goban/internal/rule"
 	"github.com/izm1chael/goban/internal/source"
 	"github.com/izm1chael/goban/internal/source/docker"
@@ -48,8 +49,9 @@ type sourceInstance struct {
 // RuntimeOverrides are process-lifetime CLI settings that remain authoritative
 // across config reloads. They are not serialized into YAML.
 type RuntimeOverrides struct {
-	LogLevel string
-	LogFile  string
+	LogLevel     string
+	LogFile      string
+	EnforcerMode string
 }
 
 type Daemon struct {
@@ -98,15 +100,13 @@ func New(cfg *config.Config, log zerolog.Logger, version, cfgPath, rulesDir stri
 	case cfg.DryRun:
 		log.Warn().Msg("dry_run enabled — using noop banner (no kernel side-effects)")
 		b = banner.NewNoop()
-	case cfg.Banner.Backend == "nftables":
-		log.Info().Str("backend", "nftables").Str("table", cfg.Banner.Table).Msg("banner backend")
-		nft := banner.NewNFTables(cfg.Banner.Table, cfg.Banner.SetV4, cfg.Banner.SetV6, cfg.Banner.Chain, cfg.IPv6)
-		nft.SetForwardChain(cfg.Banner.ForwardChain)
-		b = nft
+	case cfg.Enforcer.Mode == "split":
+		log.Info().Str("socket", cfg.Enforcer.SocketPath).Msg("using privilege-separated firewall enforcer")
+		remote := banner.NewRemote(cfg.Enforcer.SocketPath, cfg.Banner.Backend)
+		remote.SetExpectedPolicyFingerprint(config.EnforcementPolicyFingerprint(cfg))
+		b = remote
 	default:
-		ipt := banner.NewIPTables(cfg.IPSetNameV4, cfg.IPSetNameV6, cfg.IPv6)
-		ipt.SetChains(cfg.Banner.IPTablesChains)
-		b = ipt
+		b = firewall.NewLocal(cfg, log)
 	}
 	if cfg.BatchBans {
 		b = banner.NewBatched(b, log, banner.BatchOpts{})
@@ -546,6 +546,16 @@ func (d *Daemon) runSweeper(ctx context.Context) {
 
 // ---- control.State implementation ----
 
+func cfgEnforcerMode(cfg *config.Config) string {
+	if cfg == nil || cfg.DryRun {
+		return "dry-run"
+	}
+	if cfg.Enforcer.Mode == "split" {
+		return "split"
+	}
+	return "direct"
+}
+
 func (d *Daemon) Status() control.StatusResp {
 	listCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	bans, bannerErr := d.banner.List(listCtx)
@@ -574,6 +584,7 @@ func (d *Daemon) Status() control.StatusResp {
 		DroppedLines:    dropped,
 		MemoryBytes:     mem.Alloc,
 		Goroutines:      runtime.NumGoroutine(),
+		EnforcementMode: cfgEnforcerMode(d.cfg),
 	}
 	if bannerErr != nil {
 		resp.BannerError = bannerErr.Error()

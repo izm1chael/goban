@@ -74,6 +74,16 @@ ipset_name_v6: goban-ban-v6
 #                        netlink subsystem. Cleaner on pure-nftables hosts;
 #                        operator must not also be running fail2ban with the
 #                        iptables backend on the same chain.
+# Privilege separation. The portable config default remains direct so the same
+# file works in single-process containers and manual launches. Packaged systemd
+# units override this to split, where goban-daemon runs unprivileged and only
+# goban-enforcer holds firewall capabilities. `goban-client setup` proposes
+# split automatically on detected systemd hosts.
+enforcer:
+  mode: direct
+  socket_path: /run/goban-enforcer/enforcer.sock
+  allowed_user: goban
+
 banner:
   backend: iptables
   # INPUT protects host services; FORWARD covers bridged/routed workloads,

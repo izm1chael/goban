@@ -2,7 +2,7 @@
 Description=Persist GoBan default firewall sets across reboot
 Documentation=https://github.com/izm1chael/goban
 After=ipset.service iptables.service nftables.service
-Before=goban.service
+Before=goban-enforcer.service goban.service
 
 [Service]
 Type=oneshot

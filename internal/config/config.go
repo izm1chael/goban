@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -49,6 +50,7 @@ type Config struct {
 	IPSetNameV4       string         `yaml:"ipset_name_v4"`
 	IPSetNameV6       string         `yaml:"ipset_name_v6"`
 	Banner            BannerConfig   `yaml:"banner"`
+	Enforcer          EnforcerConfig `yaml:"enforcer"`
 	StrikeChanSize    int            `yaml:"strike_chan_size"`
 	DryRun            bool           `yaml:"dry_run"`
 	BatchBans         bool           `yaml:"batch_bans"`
@@ -75,6 +77,15 @@ type BannerConfig struct {
 	SetV6        string `yaml:"set_v6"`
 	Chain        string `yaml:"chain"`         // input-hook chain
 	ForwardChain string `yaml:"forward_chain"` // forward-hook chain; empty disables forwarded-traffic protection
+}
+
+// EnforcerConfig controls privilege separation. direct keeps the historical
+// single-process firewall path; split routes typed decisions to goban-enforcer
+// over a private Unix socket authenticated with Linux peer credentials.
+type EnforcerConfig struct {
+	Mode        string `yaml:"mode"`         // direct | split
+	SocketPath  string `yaml:"socket_path"`  // split mode only
+	AllowedUser string `yaml:"allowed_user"` // split mode only; exact detector peer UID
 }
 
 // RuleDefaults supplies fallback per-rule settings when a rule leaves them
@@ -165,6 +176,11 @@ func DefaultConfig() *Config {
 			Chain:          "input",
 			ForwardChain:   "forward",
 		},
+		Enforcer: EnforcerConfig{
+			Mode:        "direct",
+			SocketPath:  "/run/goban-enforcer/enforcer.sock",
+			AllowedUser: "goban",
+		},
 	}
 }
 
@@ -240,6 +256,9 @@ func (c *Config) Validate() error {
 	if err := c.validateBanner(); err != nil {
 		return err
 	}
+	if err := c.validateEnforcer(); err != nil {
+		return err
+	}
 	srcNames, err := c.validateSources()
 	if err != nil {
 		return err
@@ -294,6 +313,23 @@ func (c *Config) validateBanner() error {
 		return fmt.Errorf("banner.forward_chain=%q: invalid nftables identifier (1-31 safe characters)", c.Banner.ForwardChain)
 	}
 	return nil
+}
+
+func (c *Config) validateEnforcer() error {
+	switch c.Enforcer.Mode {
+	case "", "direct":
+		return nil
+	case "split":
+		if c.Enforcer.SocketPath == "" || !filepath.IsAbs(c.Enforcer.SocketPath) {
+			return fmt.Errorf("enforcer.socket_path must be an absolute path when mode=split")
+		}
+		if !validIdentifier(c.Enforcer.AllowedUser) {
+			return fmt.Errorf("enforcer.allowed_user %q must match %s", c.Enforcer.AllowedUser, identifierPattern.String())
+		}
+		return nil
+	default:
+		return fmt.Errorf("enforcer.mode %q: must be direct or split", c.Enforcer.Mode)
+	}
 }
 
 func (c *Config) validateSources() (map[string]struct{}, error) {

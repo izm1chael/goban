@@ -9,7 +9,7 @@ trap 'rm -rf "$TMP"' EXIT
 build_once() {
   local out=$1
   mkdir -p "$out"
-  for cmd in goban-daemon goban-client goban-corpus goban-soak; do
+  for cmd in goban-daemon goban-enforcer goban-client goban-corpus goban-soak; do
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$VERSION" \
       -o "$out/$cmd" "./cmd/$cmd"

@@ -1,0 +1,56 @@
+.TH GOBAN-ENFORCER 8 "August 2026" "GoBan" "System Administration"
+.SH NAME
+goban-enforcer \- minimal privileged firewall helper for GoBan
+.SH SYNOPSIS
+.B goban-enforcer
+.RI [ options ]
+.SH DESCRIPTION
+.B goban-enforcer
+owns GoBan's firewall capabilities in privilege-separated deployments. It
+listens on a private Unix socket and accepts only typed setup, policy-reload,
+ban, unban, list, diagnostics, and close operations from the configured daemon
+UID (or root). It does not parse logs, load rule expressions, expose the operator
+control API, or accept arbitrary firewall commands.
+.PP
+Packaged systemd installations run
+.B goban-daemon
+as the unprivileged goban user and start this helper automatically as the
+separate non-login goban-enforcer user. The helper refuses normal startup unless
+its runtime privilege state is non-root, NoNewPrivileges is enabled, and its
+effective, bounding, and ambient capability masks contain only CAP_NET_ADMIN.
+.SH OPTIONS
+.TP
+.BI --config " path"
+GoBan YAML configuration. Default: /etc/goban/goban.yaml.
+.TP
+.BI --rules-dir " path"
+Optional rules directory used while validating effective configuration.
+.TP
+.BI --socket " path"
+Override the private enforcer Unix socket.
+.TP
+.BI --allowed-user " user"
+Override the Unix user permitted to connect.
+.TP
+.B --version
+Print the build version and exit.
+.SH SECURITY
+The socket is forced to mode 0660 between the separate helper and detector identities.
+The server also validates Linux SO_PEERCRED on every accepted Unix connection.
+No protocol operation can carry a shell command or firewall expression. Request
+bodies, headers, connection concurrency, IP/rule/TTL values, and protocol version
+are bounded or validated. The helper independently refuses loopback, multicast,
+local-interface, global-allowlist, and per-rule-allowlist ban targets. On hot
+reload it independently reloads the root-managed policy and swaps it only when
+its semantic fingerprint matches the detector's expected fingerprint.
+.PP
+The packaged unit runs the helper as the separate non-login goban-enforcer user
+and bounds it to CAP_NET_ADMIN only. The helper primary group is goban so the
+detector can open the socket; SO_PEERCRED still admits only the configured
+detector UID (or root).
+A compromised detector can still request typed bans of non-protected remote
+addresses or typed unbans; the split limits kernel/root capability rather than
+proving detector intent.
+.SH SEE ALSO
+.BR goban-daemon (8),
+.BR goban-client (1)

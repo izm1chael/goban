@@ -70,6 +70,11 @@ func Detect(root string) (Plan, error) {
 	facts.Fail2Ban = exists(root, "/etc/fail2ban") || commandAvailable(root, "fail2ban-client")
 
 	cfg := config.DefaultConfig()
+	if facts.Systemd {
+		cfg.Enforcer.Mode = "split"
+	} else {
+		facts.Warnings = append(facts.Warnings, "systemd was not detected; proposal keeps direct enforcement mode (packaged systemd hosts use privilege separation)")
+	}
 	cfg.Sources = nil
 	cfg.Rules = nil
 	cfg.DryRun = true // setup always begins in observe-only mode
@@ -124,6 +129,9 @@ func Detect(root string) (Plan, error) {
 	}
 	if facts.Docker {
 		facts.Warnings = append(facts.Warnings, "Docker was detected; container-specific rule bundles require explicit container names or labels")
+		if cfg.Enforcer.Mode == "split" {
+			facts.Warnings = append(facts.Warnings, "split mode does not grant the goban user Docker-socket access automatically; docker group/socket access is effectively root-equivalent and must be an explicit operator decision")
+		}
 	}
 	if facts.Fail2Ban {
 		facts.Warnings = append(facts.Warnings, "Fail2Ban is installed; use 'goban-client migrate fail2ban' and keep GoBan in dry-run until cutover")
@@ -183,6 +191,8 @@ This is a staging directory. The live system has not been changed.
 
 The generated configuration starts with dry_run: true. Keep it that way while
 checking rule matches and while any existing Fail2Ban service is enforcing.
+On systemd hosts the proposal uses enforcer.mode: split so log parsing can run
+unprivileged while goban-enforcer alone owns firewall capabilities.
 
 Validate:
 

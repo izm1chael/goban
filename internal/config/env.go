@@ -22,6 +22,9 @@ import (
 //   - GOBAN_IPSET_V4         (string)
 //   - GOBAN_IPSET_V6         (string)
 //   - GOBAN_ALLOWLIST        (csv of CIDRs, replaces existing)
+//   - GOBAN_ENFORCER_MODE    (direct|split)
+//   - GOBAN_ENFORCER_SOCKET  (absolute Unix socket path)
+//   - GOBAN_ENFORCER_USER    (daemon user accepted by the enforcer)
 func ApplyEnvOverrides(cfg *Config) error {
 	setStringEnv("GOBAN_LOG_LEVEL", func(v string) { cfg.LogLevel = v })
 	setStringEnv("GOBAN_LOG_FILE", func(v string) { cfg.LogFile = v })
@@ -29,6 +32,9 @@ func ApplyEnvOverrides(cfg *Config) error {
 	setStringEnv("GOBAN_SOCKET_GROUP", func(v string) { cfg.SocketGroup = v })
 	setStringEnv("GOBAN_IPSET_V4", func(v string) { cfg.IPSetNameV4 = v })
 	setStringEnv("GOBAN_IPSET_V6", func(v string) { cfg.IPSetNameV6 = v })
+	setStringEnv("GOBAN_ENFORCER_MODE", func(v string) { cfg.Enforcer.Mode = v })
+	setStringEnv("GOBAN_ENFORCER_SOCKET", func(v string) { cfg.Enforcer.SocketPath = v })
+	setStringEnv("GOBAN_ENFORCER_USER", func(v string) { cfg.Enforcer.AllowedUser = v })
 
 	if v := os.Getenv("GOBAN_SOCKET_MODE"); v != "" {
 		mode, err := strconv.ParseUint(v, 8, 32)

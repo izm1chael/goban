@@ -13,7 +13,8 @@ The current design emphasises truthful enforcement state:
 - automatic and manual bans share one audit and attribution pipeline;
 - configuration is strict YAML, so misspelled security settings fail startup;
 - reload builds a candidate graph first and preserves the active graph on candidate-start failure;
-- host-input and forwarded traffic are protected by default.
+- host-input and forwarded traffic are protected by default;
+- packaged systemd installs keep log parsing unprivileged and isolate firewall mutation in a tiny helper.
 
 ## Features
 
@@ -30,7 +31,26 @@ The current design emphasises truthful enforcement state:
 - Persistent strike state with semantic rule fingerprints
 - Persistent ban attribution metadata
 - Unix-socket control API and `goban-client`
+- Privilege-separated systemd mode: zero-capability `goban-daemon` + minimal `goban-enforcer`
 - Debian/RPM/Arch packaging, systemd units, Docker images, and smoke stack
+
+## Privilege-separated native installs
+
+Packaged systemd hosts split detection from enforcement:
+
+```text
+untrusted logs -> goban-daemon (User=goban, CapEff=0)
+                         |
+                         | typed decisions over private 0660 Unix socket + SO_PEERCRED
+                         v
+                  goban-enforcer (NET_ADMIN) -> kernel firewall
+```
+
+The helper checks the connecting UID with `SO_PEERCRED`, accepts no arbitrary shell/firewall expression, independently enforces protected-address policy, and confirms each kernel operation before the detector can count a ban. If the helper restarts, the detector retains strikes, performs idempotent setup, and retries the next typed operation once. See [privilege separation](docs/PRIVILEGE_SEPARATION.md).
+
+`enforcer.mode: direct` remains available for manual launches and the current host-network container image. It preserves compatibility but requires firewall capability in the daemon process.
+
+File permissions matter in split mode. Packages add `goban` to conventional `adm`/`systemd-journal` groups where present; custom root-only logs need explicit read access. Docker-socket access is never granted automatically because the Docker group is effectively root-equivalent.
 
 ## Important operating model
 
@@ -51,7 +71,7 @@ cd goban
 make build
 make test
 make test-race
-make corpus              # 99 curated production-pipeline compatibility cases
+make corpus              # 105 curated production-pipeline compatibility cases
 ```
 
 The default build is CGO-free and does not include journald support. For journald:
@@ -64,7 +84,7 @@ make build-journald
 Useful targets:
 
 ```text
-make build                 CGO-free daemon and client
+make build                 CGO-free daemon, enforcer, client, corpus, and soak tools
 make build-journald        daemon with sdjournal support
 make test                  go test ./...
 make test-race             go test -race ./...
@@ -90,13 +110,15 @@ make package               deb, rpm, and Arch packages
 Release packages install:
 
 - `/usr/bin/goban-daemon`
+- `/usr/bin/goban-enforcer`
 - `/usr/bin/goban-client`
 - `/usr/bin/goban-corpus`
 - `/usr/bin/goban-soak`
 - `/etc/goban/goban.yaml`
 - `/etc/goban/rules.d/` for enabled rule bundles
 - `/usr/share/goban/rules-available/` for the complete rule library
-- `goban.service`
+- `goban.service` (unprivileged detector/rule engine)
+- `goban-enforcer.service` (minimal privileged firewall helper)
 - optional `goban-persist.service`
 
 Only the `sshd` and `recidive` bundles are enabled by a fresh package. Other bundles are available but are not activated until their required sources exist.
@@ -112,7 +134,7 @@ sudo dnf install ./goban-1.0.0-1.x86_64.rpm
 sudo pacman -U ./goban-1.0.0-1-x86_64.pkg.tar.zst
 ```
 
-The package does not start the daemon automatically on first install. Upgrades do restart an already-active GoBan process so the running daemon cannot silently remain on the old binary, and real package removal stops/disables the service before its unit is removed. `iptables` is a weak/recommended dependency for the default backend; the native nftables backend has no mandatory userspace firewall CLI dependency:
+The package does not start the daemon automatically on first install. Native systemd packages use privilege separation by default: `goban-daemon` runs as the dedicated `goban` account with zero effective capabilities and `goban-enforcer` runs as a separate non-login user with only `CAP_NET_ADMIN`. Upgrades restart the active pair so mixed binaries are not left running, and removal stops both services. `iptables` is a weak/recommended dependency for the default backend; the native nftables backend has no mandatory userspace firewall CLI dependency:
 
 ```bash
 sudo editor /etc/goban/goban.yaml
@@ -160,7 +182,7 @@ docker run --rm --network host \
   goban:latest
 ```
 
-`--network host` and `NET_ADMIN` are required for the container to modify the host network namespace. Mounting the Docker socket is required only for Docker log sources.
+The current single-container image intentionally uses `enforcer.mode: direct`; `--network host` and `NET_ADMIN` are therefore required for the container to modify the host network namespace. Native systemd packages use split mode. Mounting the Docker socket is required only for Docker log sources and is itself root-equivalent.
 
 ## Minimal configuration
 
@@ -408,7 +430,7 @@ goban-client config validate --config /etc/goban/goban.yaml
 goban-client config show-effective --config /etc/goban/goban.yaml
 ```
 
-The socket defaults to `/run/goban/goban.sock`, mode `0660`. When `socket_group: goban` is configured, GoBan resolves that group and applies socket ownership; an unknown group fails control-server startup rather than silently leaving `root:root` ownership.
+The operator control socket defaults to `/run/goban/goban.sock`, mode `0660`. With `socket_group: goban`, the packaged unprivileged detector already owns that group. A custom control group must also be granted to the `goban` account; an unknown or inaccessible group fails control-server startup rather than silently weakening socket permissions.
 
 `rule test` either fetches the complete effective rule from the daemon or, with `--config`/`--rules-dir`, loads the exact startup configuration offline. It runs the same matcher, date policy, exclusions, allowlists, trusted-proxy gate, tracker, and noop banner pipeline. Input is read with the same 16 KiB bounded-record semantics. The compatibility alias `goban-client test` remains available.
 
@@ -467,7 +489,10 @@ No throughput percentage is published here until the corrected exact-accounting 
 
 ## Security notes
 
-- The daemon requires `CAP_NET_ADMIN`; the provided systemd unit bounds capabilities and applies filesystem/kernel hardening.
+- Packaged `goban-daemon` runs as `User=goban` with zero effective capabilities; only `goban-enforcer` retains bounded firewall capabilities.
+- The enforcer socket is mode `0660` between the separate helper/detector identities, and peer UID is independently verified with Linux `SO_PEERCRED`. The protocol accepts typed decisions, never raw firewall commands.
+- The enforcer independently rejects protected local/global/per-rule addresses before applying a ban.
+- Direct compatibility mode requires the daemon itself to hold firewall capability and therefore has a larger privilege footprint.
 - Log data cannot choose an executable. The iptables setup runner permits fixed binaries and arguments generated from validated configuration.
 - Matching uses Go's linear-time RE2 engine.
 - Records are bounded before matching and, for file/Docker/journald sources, before an unbounded line allocation.
@@ -478,12 +503,16 @@ No throughput percentage is published here until the corrected exact-accounting 
 ## Project layout
 
 ```text
-cmd/goban-daemon/        daemon binary
+cmd/goban-daemon/        unprivileged detector/rule daemon
+cmd/goban-enforcer/      minimal privileged firewall helper
 cmd/goban-client/        control, setup, and migration client
 cmd/goban-corpus/        curated/generated/external corpus tooling
 cmd/goban-soak/          long-running release evidence collector
 internal/allowlist/      CIDR matching and exact local-address discovery
-internal/banner/         confirmed firewall backends and batching
+internal/banner/         confirmed firewall backends, remote client, batching
+internal/enforcer/       privileged typed-protocol server and safety policy
+internal/enforcerproto/  versioned detector/enforcer wire types
+internal/firewall/       shared local backend factory
 internal/config/         strict layered YAML/env loading and validation
 internal/control/        Unix-socket API, client, and audit stream
 internal/daemon/         lifecycle, transactional reload, persistence
@@ -502,7 +531,7 @@ internal/tracker/        sliding windows and fingerprinted state
 deploy/                  containers, smoke stack, and systemd units
 examples/                sample config and rules-available library
 packaging/               nfpm and Arch packaging
-man/                     daemon/client manual pages
+man/                     daemon/enforcer/client manual pages
 benchmark/               load and exact-accounting harnesses
 docs/                      threat model, rule support, release checklist
 test/                      fault, privileged kernel, and package gates

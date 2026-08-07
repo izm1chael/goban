@@ -9,6 +9,28 @@ post_install() {
         useradd --system --gid goban --no-create-home \
                 --shell /usr/sbin/nologin --comment "GoBan daemon" goban
     fi
+    if ! getent passwd goban-enforcer >/dev/null 2>&1; then
+        useradd --system --gid goban --no-create-home \
+                --shell /usr/sbin/nologin --comment "GoBan firewall enforcer" goban-enforcer
+    fi
+
+    # Give the unprivileged detector read access to conventional distro logs
+    # where those standard groups exist. Docker membership is intentionally
+    # never granted because access to docker.sock is effectively root.
+    for grp in adm systemd-journal; do
+        getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" goban || true
+    done
+
+    if [ -d /etc/goban ]; then
+        chgrp -R goban /etc/goban || return 1
+        chmod -R g+rX /etc/goban || return 1
+        [ ! -f /etc/goban/goban.yaml ] || chmod 0640 /etc/goban/goban.yaml || return 1
+    fi
+    for dir in /var/lib/goban /var/log/goban; do
+        if [ -d "$dir" ]; then
+            chown -R goban:goban "$dir" || return 1
+        fi
+    done
 
     systemctl daemon-reload >/dev/null 2>&1 || true
 
@@ -20,8 +42,10 @@ Next steps:
   1. Generate a reviewable dry-run proposal:
        sudo goban-client setup --write --out /root/goban-setup
   2. Review /etc/goban/goban.yaml; enable extra rules from /usr/share/goban/rules-available/
-  3. Enable + start the daemon:
+  3. Enable + start GoBan (the privileged enforcer is pulled in automatically):
        sudo systemctl enable --now goban
+  4. Verify privilege separation and kernel enforcement:
+       sudo goban-client doctor --probe
 
 Test a rule offline before deploying it:
   sudo goban-client test --rule sshd /var/log/auth.log
@@ -32,10 +56,21 @@ EOF
 }
 
 post_upgrade() {
+    for grp in adm systemd-journal; do
+        getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" goban || true
+    done
+    if [ -d /etc/goban ]; then
+        chgrp -R goban /etc/goban || return 1
+        chmod -R g+rX /etc/goban || return 1
+        [ ! -f /etc/goban/goban.yaml ] || chmod 0640 /etc/goban/goban.yaml || return 1
+    fi
+    for dir in /var/lib/goban /var/log/goban; do
+        [ ! -d "$dir" ] || chown -R goban:goban "$dir" || return 1
+    done
     systemctl daemon-reload >/dev/null 2>&1 || true
-    # ExecReload only reloads GoBan configuration; it does not replace the
-    # process image. Restart an active daemon so package upgrades actually run
-    # the new binary.
+    # goban-enforcer.service is PartOf goban.service, so cycling the active
+    # detector also cycles the privileged helper and starts it first again via
+    # the Requires/After relationship.
     if systemctl is-active --quiet goban.service >/dev/null 2>&1; then
         systemctl restart goban.service || return 1
     fi
@@ -43,6 +78,7 @@ post_upgrade() {
 
 pre_remove() {
     systemctl disable --now goban.service >/dev/null 2>&1 || true
+    systemctl disable --now goban-enforcer.service >/dev/null 2>&1 || true
     systemctl disable --now goban-persist.service >/dev/null 2>&1 || true
 }
 
@@ -57,7 +93,7 @@ The following are intentionally NOT deleted:
   /etc/goban/            — your config and rule bundles
   /var/lib/goban/        — persisted strike state
   /var/log/goban/        — audit log
-  goban system user/group
+  goban and goban-enforcer system identities
   Existing GoBan kernel ban entries (until expiry, firewall reset, or reboot)
 
 To purge everything:
@@ -65,6 +101,7 @@ To purge everything:
   sudo ipset destroy goban-ban-v4 2>/dev/null || true
   sudo ipset destroy goban-ban-v6 2>/dev/null || true
   sudo nft delete table inet goban 2>/dev/null || true
+  sudo userdel goban-enforcer 2>/dev/null || true
   sudo userdel goban && sudo groupdel goban
 
 EOF

@@ -118,6 +118,7 @@ type effectiveConfig struct {
 	IPSetNameV4       string                `yaml:"ipset_name_v4"`
 	IPSetNameV6       string                `yaml:"ipset_name_v6,omitempty"`
 	Banner            BannerConfig          `yaml:"banner"`
+	Enforcer          EnforcerConfig        `yaml:"enforcer"`
 	StrikeChanSize    int                   `yaml:"strike_chan_size"`
 	DryRun            bool                  `yaml:"dry_run"`
 	BatchBans         bool                  `yaml:"batch_bans"`
@@ -144,7 +145,7 @@ func newEffectiveView(cfg *Config) effectiveConfig {
 		Defaults:  effectiveRuleDefaults{MaxRetries: cfg.Defaults.MaxRetries, FindTime: durationString(cfg.Defaults.FindTime), BanTime: durationString(cfg.Defaults.BanTime)},
 		Sources:   cfg.Sources, Rules: rules, RulesDir: cfg.RulesDir,
 		ReplayOnStart: cfg.ReplayOnStart, FlushOnExit: cfg.FlushOnExit, IPv6: cfg.IPv6,
-		IPSetNameV4: cfg.IPSetNameV4, IPSetNameV6: cfg.IPSetNameV6, Banner: cfg.Banner,
+		IPSetNameV4: cfg.IPSetNameV4, IPSetNameV6: cfg.IPSetNameV6, Banner: cfg.Banner, Enforcer: cfg.Enforcer,
 		StrikeChanSize: cfg.StrikeChanSize, DryRun: cfg.DryRun, BatchBans: cfg.BatchBans,
 		AuditLog: cfg.AuditLog, StatePath: cfg.StatePath, StateSaveInterval: durationString(cfg.StateSaveInterval),
 	}

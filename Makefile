@@ -2,6 +2,7 @@ SHELL := /bin/bash
 BIN_DIR := bin
 DIST_DIR := dist
 DAEMON := $(BIN_DIR)/goban-daemon
+ENFORCER := $(BIN_DIR)/goban-enforcer
 CLIENT := $(BIN_DIR)/goban-client
 CORPUS := $(BIN_DIR)/goban-corpus
 SOAK := $(BIN_DIR)/goban-soak
@@ -18,6 +19,7 @@ all: build
 build:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(DAEMON) ./cmd/goban-daemon
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(ENFORCER) ./cmd/goban-enforcer
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SOAK) ./cmd/goban-soak
@@ -25,6 +27,7 @@ build:
 build-journald:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=1 go build -trimpath -tags=journald -ldflags="$(LDFLAGS)" -o $(DAEMON) ./cmd/goban-daemon
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(ENFORCER) ./cmd/goban-enforcer
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(SOAK) ./cmd/goban-soak
@@ -32,6 +35,7 @@ build-journald:
 version-smoke:
 	$(MAKE) build VERSION=version-smoke
 	@test "$$($(DAEMON) --version)" = "version-smoke"
+	@test "$$($(ENFORCER) --version)" = "version-smoke"
 	@test "$$($(CLIENT) version)" = "version-smoke"
 	@test "$$($(CORPUS) version)" = "version-smoke"
 	@test "$$($(SOAK) version)" = "version-smoke"
@@ -114,9 +118,10 @@ clean:
 # `make package` and CI runs.
 man:
 	@gzip -fk man/goban-daemon.8
+	@gzip -fk man/goban-enforcer.8
 	@gzip -fk man/goban-client.1
 	@gzip -fk man/goban-soak.1
-	@echo "man pages → daemon, client, and soak pages"
+	@echo "man pages → daemon, enforcer, client, and soak pages"
 
 # Build .deb, .rpm, and .pkg.tar.zst (Arch) via nfpm. Install nfpm with:
 #   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
@@ -138,8 +143,9 @@ package:
 
 package-binaries-check:
 	@test "$(VERSION)" != "dev" || { echo "VERSION must be set for package artifacts" >&2; exit 2; }
-	@test -x "$(DAEMON)" -a -x "$(CLIENT)" -a -x "$(CORPUS)" -a -x "$(SOAK)" || { echo "package binaries are missing; run make build VERSION=$(VERSION)" >&2; exit 2; }
+	@test -x "$(DAEMON)" -a -x "$(ENFORCER)" -a -x "$(CLIENT)" -a -x "$(CORPUS)" -a -x "$(SOAK)" || { echo "package binaries are missing; run make build VERSION=$(VERSION)" >&2; exit 2; }
 	@test "$$($(DAEMON) --version)" = "$(VERSION)" || { echo "$(DAEMON) does not report VERSION=$(VERSION)" >&2; exit 2; }
+	@test "$$($(ENFORCER) --version)" = "$(VERSION)" || { echo "$(ENFORCER) does not report VERSION=$(VERSION)" >&2; exit 2; }
 	@test "$$($(CLIENT) version)" = "$(VERSION)" || { echo "$(CLIENT) does not report VERSION=$(VERSION)" >&2; exit 2; }
 	@test "$$($(CORPUS) version)" = "$(VERSION)" || { echo "$(CORPUS) does not report VERSION=$(VERSION)" >&2; exit 2; }
 	@test "$$($(SOAK) version)" = "$(VERSION)" || { echo "$(SOAK) does not report VERSION=$(VERSION)" >&2; exit 2; }

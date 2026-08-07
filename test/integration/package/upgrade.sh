@@ -27,6 +27,7 @@ docker run --rm \
     grep -q "audit-sentinel" /var/log/goban/operator-audit
     goban-client config validate --config /etc/goban/goban.yaml
     test "$(goban-daemon --version)" = "1.0.0-rc2"
+    test "$(goban-enforcer --version)" = "1.0.0-rc2"
     test "$(goban-client version)" = "1.0.0-rc2"
     test "$(goban-corpus version)" = "1.0.0-rc2"
     test "$(goban-soak version)" = "1.0.0-rc2"

@@ -79,8 +79,8 @@ func TestApplyRuntimeOverrides(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.LogLevel = "info"
 	cfg.LogFile = "/from-yaml.log"
-	applyRuntimeOverrides(cfg, RuntimeOverrides{LogLevel: "debug", LogFile: "/from-cli.log"})
-	if cfg.LogLevel != "debug" || cfg.LogFile != "/from-cli.log" {
-		t.Fatalf("runtime overrides not applied: level=%q file=%q", cfg.LogLevel, cfg.LogFile)
+	applyRuntimeOverrides(cfg, RuntimeOverrides{LogLevel: "debug", LogFile: "/from-cli.log", EnforcerMode: "split"})
+	if cfg.LogLevel != "debug" || cfg.LogFile != "/from-cli.log" || cfg.Enforcer.Mode != "split" {
+		t.Fatalf("runtime overrides not applied: level=%q file=%q enforcer=%q", cfg.LogLevel, cfg.LogFile, cfg.Enforcer.Mode)
 	}
 }
