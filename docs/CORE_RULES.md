@@ -50,6 +50,4 @@ model described for Nginx.
 
 ## Promotion and regression policy
 
-Changes to any core parser require updates to `testdata/rules/core-fixtures.yaml`
-and a passing `TestCoreRuleFixtures`. Application or log-format changes should
-be added as new fixtures before the compatibility claim is expanded.
+Changes to any core parser require updates to `testdata/rules/core-fixtures.yaml` and `testdata/corpus/manifest.yaml`, plus passing `TestCoreRuleFixtures` and `TestRepositoryCorpus` gates. Application or log-format changes must be represented by positive and hard-negative cases before the compatibility claim is expanded. Optional upstream differential tests are documented in `docs/CORPUS_TESTING.md`.

@@ -51,6 +51,7 @@ cd goban
 make build
 make test
 make test-race
+make corpus              # 99 curated production-pipeline compatibility cases
 ```
 
 The default build is CGO-free and does not include journald support. For journald:
@@ -70,6 +71,9 @@ make test-race             go test -race ./...
 make verify-release        formatting, vet, race, fixtures, script syntax
 make test-fault            repeated lifecycle/failure tests
 make test-kernel           representative privileged end-to-end firewall tests
+make corpus                curated rule corpus through the production pipeline
+make corpus-generate       deterministic million-line mixed corpus
+make corpus-external       opt-in pinned upstream compatibility corpora
 make package-smoke         build/install deb, rpm, and Arch packages in clean containers
 make docker-build          Alpine runtime image
 make docker-build-journald Debian journald-capable image
@@ -422,7 +426,7 @@ Treat bundles as reviewed starting points, not universal log parsers. Before ena
 4. verify reverse-proxy attribution;
 5. reload and inspect `goban-client sources` and `goban-client rules`.
 
-CI validates all bundled YAML. The 1.0 core-supported set (`sshd`, `nginx-http-auth`, and `apache-auth`) is gated by positive, negative, malformed, IPv4, and IPv6 fixtures in `testdata/rules/`. The support policy is documented in `docs/RULE_SUPPORT.md` and exact log-format/proxy notes in `docs/CORE_RULES.md`; other bundles remain available/experimental until they meet the same bar.
+CI validates all bundled YAML and runs the curated production-pipeline corpus in `testdata/corpus/manifest.yaml`. The current corpus covers the bundled SSH, web, mail, application, and recidive rules with positive, legitimate-negative, malformed, IPv4, IPv6, field-order, exclusion, and threshold cases. Optional pinned Fail2Ban and Loghub inputs stay outside the repository and are fetched only after explicit licence acceptance. See `docs/CORPUS_TESTING.md`, `docs/RULE_SUPPORT.md`, and `docs/CORE_RULES.md`; non-core bundles remain available/experimental until their compatibility evidence is promoted.
 
 ## Release verification
 
@@ -496,7 +500,8 @@ man/                     daemon/client manual pages
 benchmark/               load and exact-accounting harnesses
 docs/                      threat model, rule support, release checklist
 test/                      fault, privileged kernel, and package gates
-testdata/rules/            core rule positive/negative fixture corpus
+testdata/rules/            compact core-rule compatibility fixtures
+testdata/corpus/           full curated corpus + external source manifest
 ```
 
 ## License

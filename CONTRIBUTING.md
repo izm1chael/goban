@@ -13,6 +13,7 @@ git clone https://github.com/izm1chael/goban
 cd goban
 make build         # produces bin/goban-daemon, bin/goban-client (CGO-free)
 make test-race     # all packages green with race detector
+make corpus        # production-pipeline rule compatibility corpus
 make docker-build  # alpine image
 ```
 
@@ -36,6 +37,9 @@ internal/rule/          per-rule orchestrator
 internal/source/        Source interface + file/docker/journal backends
 internal/tracker/       sharded sliding-window strike counter
 benchmark/              load gen, sampler, harness scripts
+cmd/goban-corpus/       maintainer corpus/differential tool
+internal/corpus/        curated, generated, and external corpus runners
+testdata/corpus/        repository cases + pinned source provenance
 deploy/                 Dockerfile, systemd units, docker-compose
 packaging/              nfpm config, install/remove scripts, Arch PKGBUILD
 ```
@@ -48,6 +52,7 @@ packaging/              nfpm config, install/remove scripts, Arch PKGBUILD
 - Error wrapping: `fmt.Errorf("context: %w", err)`. Don't lose the original.
 - New goroutines need an explicit shutdown story — context cancel, channel
   close, or a sentinel — and a unit test that proves they exit.
+- Rule changes require corpus cases for IPv4, IPv6, legitimate negatives, malformed input, and every new documented format. Do not copy third-party datasets into the repository; register pinned external sources in `testdata/corpus/manifest.yaml`.
 - Comments explain *why*. Code says *what*. If you find yourself describing
   what a function does, ask whether it should be split or renamed.
 

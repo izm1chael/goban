@@ -26,6 +26,8 @@ jobs:
           cache: true
       - name: Verify release
         run: make verify-release
+      - name: Generated corpus exact-count gate
+        run: LINES=250000 test/corpus/generate.sh /tmp/goban-release-corpus.log
       - name: Repeated lifecycle and fault tests
         run: make test-fault
       - name: Transactional reload stress

@@ -1,35 +1,32 @@
 # nginx rules. Source defaults to "nginx-access" pointing at the access log.
-# Use nginx's default combined log format for these to match cleanly.
+# These expressions target nginx's documented combined format. If a proxy
+# replaces the first field with forwarded data, use the trusted-proxy model
+# documented in docs/CORE_RULES.md instead of trusting that field directly.
 rules:
-  # Drive-by PHP/ASP scanners hitting non-existent script files.
   - name: nginx-noscript
     source: nginx-access
-    regex: '^(?P<ip>\S+) .* "(?:GET|POST|HEAD) [^"]*\.(?:php|asp|aspx|cgi|pl|exe)[^"]*" (?:404|403)'
+    regex: '^(?P<ip>\S+) \S+ \S+ \[[^]]+\] "(?:GET|POST|HEAD) [^" ]*\.(?:php|asp|aspx|cgi|pl|exe)(?:[? /][^"]*)?" (?:404|403)(?: \S+)?'
     max_retries: 6
     findtime: 10m
     bantime: 6h
 
-  # Aggressive 401/403 hammering against authenticated endpoints.
   - name: nginx-http-auth
     source: nginx-access
-    regex: '^(?P<ip>\S+) .* "(?:GET|POST) [^"]*" 401'
+    regex: '^(?P<ip>\S+) \S+ \S+ \[[^]]+\] "[A-Z]+ [^"]+" 401(?: \S+)?'
     max_retries: 5
     findtime: 10m
     bantime: 6h
 
-  # Known-bad User-Agent patterns (vulnerability scanners, web bots).
   - name: nginx-badbots
     source: nginx-access
-    regex: '^(?P<ip>\S+) .* "[^"]+" \d+ \d+ "[^"]*" "(?:[Mm]asscan|[Nn]ikto|[Nn]map|sqlmap|wpscan|ZmEu|360Spider|MJ12bot|HTTrack|libwww-perl)"'
+    regex: '^(?P<ip>\S+) .* "[^"]+" \d+ \S+ "[^"]*" "(?:[Mm]asscan|[Nn]ikto|[Nn]map|sqlmap|wpscan|ZmEu|360Spider|MJ12bot|HTTrack|libwww-perl)(?:[ /][^"]*)?"'
     max_retries: 1
     findtime: 1m
     bantime: 24h
 
-  # Probes for common admin / wp-login endpoints from IPs that aren't supposed
-  # to be hitting them.
   - name: nginx-probes
     source: nginx-access
-    regex: '^(?P<ip>\S+) .* "(?:GET|POST) /(?:wp-login\.php|xmlrpc\.php|administrator/|phpmyadmin/|\.env|\.git/config|server-status)'
+    regex: '^(?P<ip>\S+) .* "(?:GET|POST|HEAD) /(?:wp-login\.php|xmlrpc\.php|administrator(?:/|\s)|phpmyadmin(?:/|\s)|\.env(?:[?\s]|$)|\.git/config(?:[?\s]|$)|server-status(?:[?\s]|$))'
     max_retries: 3
     findtime: 10m
     bantime: 24h

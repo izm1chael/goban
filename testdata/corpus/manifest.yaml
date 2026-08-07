@@ -1,0 +1,1433 @@
+version: 1
+sources:
+- id: fail2ban-sshd
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/sshd
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: sshd
+  file_name: fail2ban-sshd.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: fail2ban-apache-auth
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/apache-auth
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: apache-auth
+  file_name: fail2ban-apache-auth.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: fail2ban-nginx-http-auth
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/nginx-http-auth
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: nginx-http-auth
+  file_name: fail2ban-nginx-http-auth.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: fail2ban-postfix
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/postfix
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: postfix-sasl
+  file_name: fail2ban-postfix.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: fail2ban-dovecot
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/dovecot
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: dovecot
+  file_name: fail2ban-dovecot.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: fail2ban-vsftpd
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/vsftpd
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: vsftpd
+  file_name: fail2ban-vsftpd.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: fail2ban-traefik-auth
+  project: Fail2Ban
+  url: https://raw.githubusercontent.com/fail2ban/fail2ban/1ebc369b05d7e871fa90e545dcd5308623c6a087/fail2ban/tests/files/logs/traefik-auth
+  license: GPL-2.0-or-later
+  license_url: https://github.com/fail2ban/fail2ban/blob/master/COPYING
+  redistribution: external-only
+  adapter: fail2ban-annotated
+  rule: traefik-auth
+  file_name: fail2ban-traefik-auth.log
+  max_bytes: 8388608
+  notes: Not vendored. Used only for optional differential compatibility testing after explicit licence acceptance.
+- id: loghub-openssh
+  project: Loghub
+  url: https://raw.githubusercontent.com/logpai/loghub/dd61d0952749ee7963bde24220d1be5ede023033/OpenSSH/OpenSSH_2k.log
+  license: Loghub research/academic licence
+  license_url: https://github.com/logpai/loghub/blob/master/LICENSE
+  redistribution: external-only
+  adapter: plain-scan
+  rule: sshd
+  file_name: loghub-openssh-2k.log
+  max_bytes: 8388608
+  notes: Real OpenSSH lab logs. Downloaded only for local research/validation; not redistributed.
+- id: loghub-apache
+  project: Loghub
+  url: https://raw.githubusercontent.com/logpai/loghub/dd61d0952749ee7963bde24220d1be5ede023033/Apache/Apache_2k.log
+  license: Loghub research/academic licence
+  license_url: https://github.com/logpai/loghub/blob/master/LICENSE
+  redistribution: external-only
+  adapter: plain-scan
+  rule: apache-auth
+  file_name: loghub-apache-2k.log
+  max_bytes: 8388608
+  notes: Real Apache error logs. Primarily a hard-negative and parser-throughput input; not redistributed.
+cases:
+- id: sshd.password.ipv4
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - ipv4
+  - core
+  lines:
+  - 'Aug  6 19:00:01 host sshd[1234]: Failed password for invalid user root from 198.51.100.20 port 51000 ssh2'
+  repeat: 3
+  expected_ip: 198.51.100.20
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.password.ipv6
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - ipv6
+  - core
+  lines:
+  - 'Aug  6 19:00:02 host sshd[1235]: Failed password for admin from 2001:db8::20 port 51001 ssh2'
+  repeat: 3
+  expected_ip: 2001:db8::20
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.session-prefix
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Jul  3 14:59:17 host sshd-session[1571]: Failed password for root from 192.0.2.21 port 56502 ssh2'
+  repeat: 3
+  expected_ip: 192.0.2.21
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.no-port
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Feb 25 14:34:11 host sshd[31603]: Failed password for invalid user ROOT from 198.51.100.22'
+  repeat: 3
+  expected_ip: 198.51.100.22
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.keyboard-interactive
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Apr 29 20:13:08 host sshd[63814]: Failed keyboard-interactive for james from 198.51.100.23 port 54520 ssh2'
+  repeat: 3
+  expected_ip: 198.51.100.23
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.keyboard-pam
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - ipv6
+  - variant
+  lines:
+  - 'Apr 30 01:42:12 host sshd[2554]: Failed keyboard-interactive/pam for invalid user james from 2001:db8::24 port 33723 ssh2'
+  repeat: 3
+  expected_ip: 2001:db8::24
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.publickey-failure
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Aug  6 19:00:03 host sshd[1236]: Failed publickey for invalid user git from 198.51.100.25 port 51002 ssh2'
+  repeat: 3
+  expected_ip: 198.51.100.25
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.ipv4-mapped
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - ipv4-mapped
+  lines:
+  - 'Aug  6 19:00:04 host sshd[1237]: Failed password for root from ::ffff:198.51.100.26 port 51003 ssh2'
+  repeat: 3
+  expected_ip: 198.51.100.26
+  expected_matches: 3
+  expected_bans: 1
+- id: sshd.accepted-publickey
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - success
+  lines:
+  - 'Aug  6 19:00:05 host sshd[1238]: Accepted publickey for admin from 198.51.100.20 port 51004 ssh2'
+  expected_matches: 0
+  expected_bans: 0
+- id: sshd.invalid-user-preauth
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - deduplication
+  lines:
+  - 'Aug  6 19:00:06 host sshd[1239]: Invalid user root from 198.51.100.27 port 51005'
+  expected_matches: 0
+  expected_bans: 0
+- id: sshd.connection-close
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - benign
+  lines:
+  - 'Aug  6 19:00:07 host sshd[1240]: Connection closed by authenticating user admin 198.51.100.28 port 51006 [preauth]'
+  expected_matches: 0
+  expected_bans: 0
+- id: sshd.hostname-not-ip
+  service: openssh
+  rule: sshd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - malformed
+  lines:
+  - 'Aug  6 19:00:08 host sshd[1241]: Failed password for root from attacker.example port 51007 ssh2'
+  expected_matches: 0
+  expected_bans: 0
+- id: sshd.embedded-log-injection
+  service: openssh
+  rule: sshd
+  format: application
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - malformed
+  lines:
+  - 'application said: Failed password for root from definitely-not-an-ip port 22 ssh2'
+  expected_matches: 0
+  expected_bans: 0
+- id: sshd-aggressive.invalid-user
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - aggressive
+  lines:
+  - 'Aug  6 19:01:01 host sshd[1300]: Invalid user oracle from 198.51.100.31 port 42000'
+  repeat: 5
+  expected_ip: 198.51.100.31
+  expected_matches: 5
+  expected_bans: 1
+- id: sshd-aggressive.deny-users
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - aggressive
+  lines:
+  - 'Apr 16 22:01:15 host sshd[5154]: User root from 198.51.100.32 not allowed because listed in DenyUsers'
+  repeat: 5
+  expected_ip: 198.51.100.32
+  expected_matches: 5
+  expected_bans: 1
+- id: sshd-aggressive.allow-users
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - aggressive
+  - ipv6
+  lines:
+  - 'Mar  3 00:17:22 host sshd[5174]: User root from 2001:db8::33 not allowed because not listed in AllowUsers'
+  repeat: 5
+  expected_ip: 2001:db8::33
+  expected_matches: 5
+  expected_bans: 1
+- id: sshd-aggressive.root-refused
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - aggressive
+  lines:
+  - 'Jan  5 01:31:41 host sshd[1643]: ROOT LOGIN REFUSED FROM 198.51.100.34 port 12345 [preauth]'
+  repeat: 5
+  expected_ip: 198.51.100.34
+  expected_matches: 5
+  expected_bans: 1
+- id: sshd-aggressive.pam-error
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - aggressive
+  lines:
+  - 'Apr 29 17:53:38 host sshd[47831]: error: PAM: authentication error for james from 198.51.100.35'
+  repeat: 5
+  expected_ip: 198.51.100.35
+  expected_matches: 5
+  expected_bans: 1
+- id: sshd-aggressive.account-locked-no-ip
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - aggressive
+  lines:
+  - 'Apr 24 01:39:19 host sshd[3719]: User root not allowed because account is locked'
+  expected_matches: 0
+  expected_bans: 0
+- id: sshd-aggressive.accepted
+  service: openssh
+  rule: sshd-aggressive
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - aggressive
+  - success
+  lines:
+  - 'Aug  6 19:01:02 host sshd[1301]: Accepted password for admin from 198.51.100.36 port 42001 ssh2'
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-auth.get-ipv4
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - ipv4
+  - core
+  lines:
+  - 198.51.100.40 - - [06/Aug/2026:19:10:00 +0100] "GET /private HTTP/1.1" 401 188 "-" "Mozilla/5.0"
+  repeat: 5
+  expected_ip: 198.51.100.40
+  expected_matches: 5
+  expected_bans: 1
+- id: nginx-auth.post-ipv6
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - ipv6
+  - core
+  lines:
+  - 2001:db8::40 - - [06/Aug/2026:19:10:01 +0100] "POST /login HTTP/2.0" 401 210 "https://example/" "curl/8.0"
+  repeat: 5
+  expected_ip: 2001:db8::40
+  expected_matches: 5
+  expected_bans: 1
+- id: nginx-auth.head
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - method-variant
+  lines:
+  - 198.51.100.41 - user [06/Aug/2026:19:10:02 +0100] "HEAD /private HTTP/1.0" 401 0 "-" "monitor"
+  repeat: 5
+  expected_ip: 198.51.100.41
+  expected_matches: 5
+  expected_bans: 1
+- id: nginx-auth.patch
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - method-variant
+  lines:
+  - 198.51.100.42 - - [06/Aug/2026:19:10:03 +0100] "PATCH /api/session HTTP/1.1" 401 92 "-" "agent"
+  repeat: 5
+  expected_ip: 198.51.100.42
+  expected_matches: 5
+  expected_bans: 1
+- id: nginx-auth.success
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - success
+  lines:
+  - 198.51.100.40 - - [06/Aug/2026:19:10:04 +0100] "POST /login HTTP/1.1" 200 188 "-" "Mozilla/5.0"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-auth-forbidden-not-auth
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - status
+  lines:
+  - 198.51.100.40 - - [06/Aug/2026:19:10:05 +0100] "GET /private HTTP/1.1" 403 188 "-" "Mozilla/5.0"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-auth-malformed-ip
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - malformed
+  lines:
+  - not-an-ip - - [06/Aug/2026:19:10:06 +0100] "GET /private HTTP/1.1" 401 188 "-" "Mozilla/5.0"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-auth-status-in-user-agent
+  service: nginx
+  rule: nginx-http-auth
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - hard-negative
+  lines:
+  - 198.51.100.43 - - [06/Aug/2026:19:10:07 +0100] "GET / HTTP/1.1" 200 5 "-" "scanner 401"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-noscript-php
+  service: nginx
+  rule: nginx-noscript
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - probe
+  lines:
+  - 198.51.100.44 - - [06/Aug/2026:19:11:00 +0100] "GET /shell.php HTTP/1.1" 404 153 "-" "scanner"
+  repeat: 6
+  expected_ip: 198.51.100.44
+  expected_matches: 6
+  expected_bans: 1
+- id: nginx-noscript-query
+  service: nginx
+  rule: nginx-noscript
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - probe
+  - ipv6
+  lines:
+  - 2001:db8::44 - - [06/Aug/2026:19:11:01 +0100] "POST /old/admin.asp?id=1 HTTP/1.1" 403 153 "-" "scanner"
+  repeat: 6
+  expected_ip: 2001:db8::44
+  expected_matches: 6
+  expected_bans: 1
+- id: nginx-noscript-existing
+  service: nginx
+  rule: nginx-noscript
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - status
+  lines:
+  - 198.51.100.44 - - [06/Aug/2026:19:11:02 +0100] "GET /index.php HTTP/1.1" 200 153 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-noscript-image
+  service: nginx
+  rule: nginx-noscript
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - extension
+  lines:
+  - 198.51.100.44 - - [06/Aug/2026:19:11:03 +0100] "GET /logo.png HTTP/1.1" 404 153 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-badbots-nikto
+  service: nginx
+  rule: nginx-badbots
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - scanner
+  lines:
+  - 198.51.100.45 - - [06/Aug/2026:19:12:00 +0100] "GET / HTTP/1.1" 200 1 "-" "Nikto/2.1.6"
+  repeat: 1
+  expected_ip: 198.51.100.45
+  expected_matches: 1
+  expected_bans: 1
+- id: nginx-badbots-sqlmap
+  service: nginx
+  rule: nginx-badbots
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - scanner
+  - ipv6
+  lines:
+  - 2001:db8::45 - - [06/Aug/2026:19:12:01 +0100] "GET /?id=1 HTTP/1.1" 200 1 "-" "sqlmap/1.8"
+  repeat: 1
+  expected_ip: 2001:db8::45
+  expected_matches: 1
+  expected_bans: 1
+- id: nginx-badbots-browser
+  service: nginx
+  rule: nginx-badbots
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - browser
+  lines:
+  - 198.51.100.45 - - [06/Aug/2026:19:12:02 +0100] "GET / HTTP/1.1" 200 1 "-" "Mozilla/5.0"
+  expected_matches: 0
+  expected_bans: 0
+- id: nginx-probe-env
+  service: nginx
+  rule: nginx-probes
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - probe
+  lines:
+  - 198.51.100.46 - - [06/Aug/2026:19:13:00 +0100] "GET /.env HTTP/1.1" 404 1 "-" "scanner"
+  repeat: 3
+  expected_ip: 198.51.100.46
+  expected_matches: 3
+  expected_bans: 1
+- id: nginx-probe-git
+  service: nginx
+  rule: nginx-probes
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - probe
+  - ipv6
+  lines:
+  - 2001:db8::46 - - [06/Aug/2026:19:13:01 +0100] "GET /.git/config?x=1 HTTP/2.0" 404 1 "-" "scanner"
+  repeat: 3
+  expected_ip: 2001:db8::46
+  expected_matches: 3
+  expected_bans: 1
+- id: nginx-probe-wordpress
+  service: nginx
+  rule: nginx-probes
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - probe
+  lines:
+  - 198.51.100.47 - - [06/Aug/2026:19:13:02 +0100] "POST /wp-login.php HTTP/1.1" 200 1 "-" "scanner"
+  repeat: 3
+  expected_ip: 198.51.100.47
+  expected_matches: 3
+  expected_bans: 1
+- id: nginx-probe-false-prefix
+  service: nginx
+  rule: nginx-probes
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - hard-negative
+  lines:
+  - 198.51.100.46 - - [06/Aug/2026:19:13:03 +0100] "GET /.environment HTTP/1.1" 404 1 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: apache-auth-modern-ipv4
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - ipv4
+  - core
+  lines:
+  - '[Thu Aug 06 19:20:00.000000 2026] [auth_basic:error] [pid 1:tid 2] [client 198.51.100.50:51234] AH01617: user root: authentication failure for "/private": Password
+    Mismatch'
+  repeat: 5
+  expected_ip: 198.51.100.50
+  expected_matches: 5
+  expected_bans: 1
+- id: apache-auth-modern-ipv6
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - ipv6
+  - core
+  lines:
+  - '[Thu Aug 06 19:20:01.000000 2026] [auth_basic:error] [pid 1] [client [2001:db8::50]:51234] AH01618: user admin not found: /private'
+  repeat: 5
+  expected_ip: 2001:db8::50
+  expected_matches: 5
+  expected_bans: 1
+- id: apache-auth-no-ah-code
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - legacy
+  lines:
+  - '[Thu Aug 06 19:20:02.000000 2026] [auth_basic:error] [pid 1] [client 198.51.100.51] user root authentication failure'
+  repeat: 5
+  expected_ip: 198.51.100.51
+  expected_matches: 5
+  expected_bans: 1
+- id: apache-auth-password-mismatch
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - variant
+  lines:
+  - '[Thu Aug 06 19:20:03.000000 2026] [auth_basic:error] [pid 1] [client 198.51.100.52:1234] AH01617: user alice: password mismatch'
+  repeat: 5
+  expected_ip: 198.51.100.52
+  expected_matches: 5
+  expected_bans: 1
+- id: apache-auth-file-missing
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - negative
+  - ordinary-error
+  lines:
+  - '[Thu Aug 06 19:20:04.000000 2026] [core:info] [pid 1] [client 198.51.100.50:51234] AH00128: File does not exist: /favicon.ico'
+  expected_matches: 0
+  expected_bans: 0
+- id: apache-auth-success-message
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - negative
+  - success
+  lines:
+  - '[Thu Aug 06 19:20:05.000000 2026] [auth_basic:info] [pid 1] [client 198.51.100.50:51234] user root authentication successful'
+  expected_matches: 0
+  expected_bans: 0
+- id: apache-auth-malformed-client
+  service: apache-httpd
+  rule: apache-auth
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - negative
+  - malformed
+  lines:
+  - '[Thu Aug 06 19:20:06.000000 2026] [auth_basic:error] [pid 1] [client not-an-address] AH01617: user root: authentication failure'
+  expected_matches: 0
+  expected_bans: 0
+- id: apache-noscript-cgi
+  service: apache-httpd
+  rule: apache-noscript
+  format: combined
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - probe
+  lines:
+  - 198.51.100.53 - - [06/Aug/2026:19:21:00 +0100] "GET /cgi-bin/test.cgi HTTP/1.1" 404 10 "-" "scanner"
+  repeat: 6
+  expected_ip: 198.51.100.53
+  expected_matches: 6
+  expected_bans: 1
+- id: apache-noscript-ok
+  service: apache-httpd
+  rule: apache-noscript
+  format: combined
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - negative
+  - status
+  lines:
+  - 198.51.100.53 - - [06/Aug/2026:19:21:01 +0100] "GET /index.php HTTP/1.1" 200 10 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: apache-overflow-uri
+  service: apache-httpd
+  rule: apache-overflows
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - overflow
+  lines:
+  - '[Thu Aug 06 19:22:00.000000 2026] [core:error] [pid 1] [client 198.51.100.54:4444] AH00566: request failed: URI too long'
+  repeat: 2
+  expected_ip: 198.51.100.54
+  expected_matches: 2
+  expected_bans: 1
+- id: apache-overflow-headers
+  service: apache-httpd
+  rule: apache-overflows
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - positive
+  - overflow
+  - ipv6
+  lines:
+  - '[Thu Aug 06 19:22:01.000000 2026] [core:error] [pid 1] [client [2001:db8::54]:4444] AH00567: request failed: error reading the headers'
+  repeat: 2
+  expected_ip: 2001:db8::54
+  expected_matches: 2
+  expected_bans: 1
+- id: apache-overflow-unrelated
+  service: apache-httpd
+  rule: apache-overflows
+  format: error-log
+  reference: https://httpd.apache.org/docs/2.4/logs.html
+  tags:
+  - negative
+  - ordinary-error
+  lines:
+  - '[Thu Aug 06 19:22:02.000000 2026] [proxy:error] [pid 1] [client 198.51.100.54:4444] AH00898: Error reading from remote server'
+  expected_matches: 0
+  expected_bans: 0
+- id: postfix-sasl-login-ipv4
+  service: postfix
+  rule: postfix-sasl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - ipv4
+  lines:
+  - 'Aug  6 19:30:00 mail postfix/smtpd[2000]: warning: unknown[198.51.100.60]: SASL LOGIN authentication failed: authentication failure'
+  repeat: 5
+  expected_ip: 198.51.100.60
+  expected_matches: 5
+  expected_bans: 1
+- id: postfix-sasl-plain-ipv6
+  service: postfix
+  rule: postfix-sasl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - ipv6
+  lines:
+  - 'Aug  6 19:30:01 mail postfix/smtpd[2001]: warning: mail.example[2001:db8::60]: SASL PLAIN authentication failed: authentication failure'
+  repeat: 5
+  expected_ip: 2001:db8::60
+  expected_matches: 5
+  expected_bans: 1
+- id: postfix-sasl-username
+  service: postfix
+  rule: postfix-sasl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - postfix-3.8
+  lines:
+  - 'Aug  6 19:30:02 mail postfix/smtpd[2002]: warning: unknown[198.51.100.61]: SASL LOGIN authentication failed: authentication failure, sasl_username=admin'
+  repeat: 5
+  expected_ip: 198.51.100.61
+  expected_matches: 5
+  expected_bans: 1
+- id: postfix-sasl-no-reason
+  service: postfix
+  rule: postfix-sasl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Aug  6 19:30:03 mail postfix/smtpd[2003]: warning: unknown[198.51.100.62]: SASL PLAIN authentication failed'
+  repeat: 5
+  expected_ip: 198.51.100.62
+  expected_matches: 5
+  expected_bans: 1
+- id: postfix-sasl-client-side
+  service: postfix
+  rule: postfix-sasl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - negative
+  - server-config
+  lines:
+  - 'Aug  6 19:30:04 mail postfix/smtp[2004]: SASL authentication failure: No worthy mechs found'
+  expected_matches: 0
+  expected_bans: 0
+- id: postfix-sasl-success
+  service: postfix
+  rule: postfix-sasl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - negative
+  - success
+  lines:
+  - 'Aug  6 19:30:05 mail postfix/smtpd[2005]: client=mail.example[198.51.100.63], sasl_method=PLAIN, sasl_username=admin'
+  expected_matches: 0
+  expected_bans: 0
+- id: postfix-rbl-ipv4
+  service: postfix
+  rule: postfix-rbl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - rbl
+  lines:
+  - 'Aug  6 19:31:00 mail postfix/smtpd[2100]: NOQUEUE: reject: RCPT from unknown[198.51.100.64]: 554 5.7.1 Service unavailable; Client host blocked'
+  repeat: 3
+  expected_ip: 198.51.100.64
+  expected_matches: 3
+  expected_bans: 1
+- id: postfix-rbl-ipv6
+  service: postfix
+  rule: postfix-rbl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - rbl
+  - ipv6
+  lines:
+  - 'Aug  6 19:31:01 mail postfix/smtpd[2101]: NOQUEUE: reject: RCPT from unknown[2001:db8::64]: 554 5.7.1 Service unavailable; Client host blocked'
+  repeat: 3
+  expected_ip: 2001:db8::64
+  expected_matches: 3
+  expected_bans: 1
+- id: postfix-rbl-tempfail
+  service: postfix
+  rule: postfix-rbl
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - negative
+  - status
+  lines:
+  - 'Aug  6 19:31:02 mail postfix/smtpd[2102]: NOQUEUE: reject: RCPT from unknown[198.51.100.64]: 450 4.7.1 Service temporarily unavailable'
+  expected_matches: 0
+  expected_bans: 0
+- id: postfix-helo-ipv4
+  service: postfix
+  rule: postfix-banned-helo
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - positive
+  - helo
+  lines:
+  - 'Aug  6 19:32:00 mail postfix/smtpd[2200]: NOQUEUE: reject: EHLO from unknown[198.51.100.65]: 504 5.5.2 <bad>: Helo command rejected: need fully-qualified hostname'
+  repeat: 3
+  expected_ip: 198.51.100.65
+  expected_matches: 3
+  expected_bans: 1
+- id: postfix-helo-allowed
+  service: postfix
+  rule: postfix-banned-helo
+  format: syslog
+  reference: https://www.postfix.org/SASL_README.html
+  tags:
+  - negative
+  - success
+  lines:
+  - 'Aug  6 19:32:01 mail postfix/smtpd[2201]: connect from mail.example[198.51.100.65]'
+  expected_matches: 0
+  expected_bans: 0
+- id: dovecot-aborted-ipv4
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - ipv4
+  lines:
+  - 'Aug  6 19:40:00 mail dovecot: imap-login: Aborted login (auth failed, 1 attempts in 2 secs): user=<admin>, method=PLAIN, rip=198.51.100.70, lip=192.0.2.10, TLS'
+  repeat: 5
+  expected_ip: 198.51.100.70
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-disconnected-ipv6
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - ipv6
+  lines:
+  - 'Aug  6 19:40:01 mail dovecot: pop3-login: Disconnected (auth failed, 1 attempts in 2 secs): user=<admin>, method=PLAIN, rip=2001:db8::70, lip=2001:db8::1, TLS'
+  repeat: 5
+  expected_ip: 2001:db8::70
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-no-prefix
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Aug  6 19:40:02 mail imap-login: Aborted login (tried to use disabled plaintext auth): user=<admin>, rip=198.51.100.71, lip=192.0.2.10'
+  repeat: 5
+  expected_ip: 198.51.100.71
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-submission
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Aug  6 19:40:03 mail dovecot: submission-login: Disconnected (authentication failed): user=<admin>, rip=198.51.100.72, lip=192.0.2.10'
+  repeat: 5
+  expected_ip: 198.51.100.72
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-multiple-attempts
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - positive
+  - variant
+  lines:
+  - 'Aug  6 19:40:04 mail dovecot: imap-login: Aborted login (3 authentication attempts): user=<admin>, rip=198.51.100.73, lip=192.0.2.10'
+  repeat: 5
+  expected_ip: 198.51.100.73
+  expected_matches: 5
+  expected_bans: 1
+- id: dovecot-success
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - negative
+  - success
+  lines:
+  - 'Aug  6 19:40:05 mail dovecot: imap-login: Login: user=<admin>, method=PLAIN, rip=198.51.100.70, lip=192.0.2.10, TLS'
+  expected_matches: 0
+  expected_bans: 0
+- id: dovecot-disconnected-no-auth
+  service: dovecot
+  rule: dovecot
+  format: syslog
+  reference: https://doc.dovecot.org/2.4.1/howto/fail2ban.html
+  tags:
+  - negative
+  - benign
+  lines:
+  - 'Aug  6 19:40:06 mail dovecot: imap-login: Disconnected: Connection closed: user=<>, rip=198.51.100.74, lip=192.0.2.10'
+  expected_matches: 0
+  expected_bans: 0
+- id: nextcloud-message-first
+  service: nextcloud
+  rule: nextcloud-login
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - positive
+  - field-order
+  lines:
+  - '{"reqId":"a","level":2,"time":"2026-08-06T19:50:00+01:00","message":"Login failed: admin (Remote IP: 198.51.100.80)","remoteAddr":"198.51.100.80","method":"POST","url":"/login"}'
+  repeat: 5
+  expected_ip: 198.51.100.80
+  expected_matches: 5
+  expected_bans: 1
+- id: nextcloud-address-first
+  service: nextcloud
+  rule: nextcloud-login
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - positive
+  - field-order
+  - ipv6
+  lines:
+  - '{"remoteAddr":"2001:db8::80","user":"--","app":"core","method":"POST","url":"/login","message":"Login failed: admin (Remote IP: 2001:db8::80)"}'
+  repeat: 5
+  expected_ip: 2001:db8::80
+  expected_matches: 5
+  expected_bans: 1
+- id: nextcloud-success
+  service: nextcloud
+  rule: nextcloud-login
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - negative
+  - success
+  lines:
+  - '{"remoteAddr":"198.51.100.80","user":"admin","message":"Login successful: "admin"","method":"POST","url":"/login"}'
+  expected_matches: 0
+  expected_bans: 0
+- id: nextcloud-unrelated-error
+  service: nextcloud
+  rule: nextcloud-login
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - negative
+  - ordinary-error
+  lines:
+  - '{"remoteAddr":"198.51.100.80","level":3,"message":"Database connection failed","method":"GET","url":"/"}'
+  expected_matches: 0
+  expected_bans: 0
+- id: nextcloud-bruteforce-address-first
+  service: nextcloud
+  rule: nextcloud-bruteforce
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - positive
+  - bruteforce
+  lines:
+  - '{"remoteAddr":"198.51.100.81","level":1,"message":"Bruteforce attempt detected","method":"POST","url":"/login"}'
+  repeat: 3
+  expected_ip: 198.51.100.81
+  expected_matches: 3
+  expected_bans: 1
+- id: nextcloud-bruteforce-message-first
+  service: nextcloud
+  rule: nextcloud-bruteforce
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - positive
+  - bruteforce
+  - ipv6
+  lines:
+  - '{"message":"bruteforce protection delayed request","level":1,"remoteAddr":"2001:db8::81","url":"/login"}'
+  repeat: 3
+  expected_ip: 2001:db8::81
+  expected_matches: 3
+  expected_bans: 1
+- id: nextcloud-bruteforce-no-address
+  service: nextcloud
+  rule: nextcloud-bruteforce
+  format: json
+  reference: https://docs.nextcloud.com/server/stable/admin_manual/configuration_server/logging_configuration.html
+  tags:
+  - negative
+  - no-subject
+  lines:
+  - '{"message":"Bruteforce protection background cleanup completed","remoteAddr":""}'
+  expected_matches: 0
+  expected_bans: 0
+- id: traefik-auth-client-first
+  service: traefik
+  rule: traefik-auth
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - positive
+  - field-order
+  lines:
+  - '{"ClientHost":"198.51.100.90","RequestMethod":"GET","RequestPath":"/private","DownstreamStatus":401,"RequestCount":1}'
+  repeat: 5
+  expected_ip: 198.51.100.90
+  expected_matches: 5
+  expected_bans: 1
+- id: traefik-auth-status-first
+  service: traefik
+  rule: traefik-auth
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - positive
+  - field-order
+  - ipv6
+  lines:
+  - '{"DownstreamStatus":403,"RequestPath":"/admin","ClientHost":"2001:db8::90","RequestMethod":"GET"}'
+  repeat: 5
+  expected_ip: 2001:db8::90
+  expected_matches: 5
+  expected_bans: 1
+- id: traefik-auth-success
+  service: traefik
+  rule: traefik-auth
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - negative
+  - success
+  lines:
+  - '{"ClientHost":"198.51.100.90","RequestMethod":"GET","RequestPath":"/private","DownstreamStatus":200}'
+  expected_matches: 0
+  expected_bans: 0
+- id: traefik-auth-upstream-status-only
+  service: traefik
+  rule: traefik-auth
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - negative
+  - hard-negative
+  lines:
+  - '{"ClientHost":"198.51.100.90","OriginStatus":401,"DownstreamStatus":200}'
+  expected_matches: 0
+  expected_bans: 0
+- id: traefik-ratelimit-client-first
+  service: traefik
+  rule: traefik-ratelimit
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - positive
+  - rate-limit
+  lines:
+  - '{"ClientHost":"198.51.100.91","RequestPath":"/api","DownstreamStatus":429}'
+  repeat: 10
+  expected_ip: 198.51.100.91
+  expected_matches: 10
+  expected_bans: 1
+- id: traefik-ratelimit-status-first
+  service: traefik
+  rule: traefik-ratelimit
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - positive
+  - rate-limit
+  - ipv6
+  lines:
+  - '{"DownstreamStatus":429,"ClientHost":"2001:db8::91","RequestPath":"/api"}'
+  repeat: 10
+  expected_ip: 2001:db8::91
+  expected_matches: 10
+  expected_bans: 1
+- id: traefik-ratelimit-503
+  service: traefik
+  rule: traefik-ratelimit
+  format: json
+  reference: https://doc.traefik.io/traefik/reference/install-configuration/observability/logs-and-accesslogs/
+  tags:
+  - negative
+  - status
+  lines:
+  - '{"ClientHost":"198.51.100.91","RequestPath":"/api","DownstreamStatus":503}'
+  expected_matches: 0
+  expected_bans: 0
+- id: vsftpd-pam-ipv4
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - ipv4
+  lines:
+  - 'Aug  6 20:00:00 ftp pam_unix(vsftpd:auth): authentication failure; logname= uid=0 euid=0 tty=ftp ruser=anonymous rhost=198.51.100.100'
+  repeat: 5
+  expected_ip: 198.51.100.100
+  expected_matches: 5
+  expected_bans: 1
+- id: vsftpd-pam-ipv6
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - ipv6
+  lines:
+  - 'Aug  6 20:00:01 ftp pam_unix(vsftpd:auth): authentication failure; logname= uid=0 euid=0 tty=ftp ruser=user rhost=2001:db8::100'
+  repeat: 5
+  expected_ip: 2001:db8::100
+  expected_matches: 5
+  expected_bans: 1
+- id: vsftpd-legacy-prefix
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - positive
+  - legacy
+  lines:
+  - 'Aug  6 20:00:02 ftp vsftpd: (pam_unix) authentication failure; logname= uid=0 euid=0 tty=ftp ruser=user rhost=198.51.100.101'
+  repeat: 5
+  expected_ip: 198.51.100.101
+  expected_matches: 5
+  expected_bans: 1
+- id: vsftpd-session-open
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - success
+  lines:
+  - 'Aug  6 20:00:03 ftp pam_unix(vsftpd:session): session opened for user ftp by (uid=0)'
+  expected_matches: 0
+  expected_bans: 0
+- id: vsftpd-no-rhost
+  service: vsftpd
+  rule: vsftpd
+  format: syslog
+  reference: https://github.com/fail2ban/fail2ban/tree/master/fail2ban/tests/files/logs
+  tags:
+  - negative
+  - no-subject
+  lines:
+  - 'Aug  6 20:00:04 ftp pam_unix(vsftpd:auth): authentication failure; logname= uid=0 euid=0 tty=ftp ruser=user'
+  expected_matches: 0
+  expected_bans: 0
+- id: wordpress-login-200
+  service: wordpress
+  rule: wordpress-login
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - wordpress
+  lines:
+  - 198.51.100.110 - - [06/Aug/2026:20:10:00 +0100] "POST /wp-login.php HTTP/1.1" 200 2048 "-" "browser"
+  repeat: 5
+  expected_ip: 198.51.100.110
+  expected_matches: 5
+  expected_bans: 1
+- id: wordpress-login-403-ipv6
+  service: wordpress
+  rule: wordpress-login
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - wordpress
+  - ipv6
+  lines:
+  - 2001:db8::110 - - [06/Aug/2026:20:10:01 +0100] "POST /wp-login.php?redirect_to=%2Fwp-admin HTTP/1.1" 403 200 "-" "browser"
+  repeat: 5
+  expected_ip: 2001:db8::110
+  expected_matches: 5
+  expected_bans: 1
+- id: wordpress-login-get
+  service: wordpress
+  rule: wordpress-login
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - method
+  lines:
+  - 198.51.100.110 - - [06/Aug/2026:20:10:02 +0100] "GET /wp-login.php HTTP/1.1" 200 2048 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: wordpress-login-success-302
+  service: wordpress
+  rule: wordpress-login
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - success
+  lines:
+  - 198.51.100.110 - - [06/Aug/2026:20:10:03 +0100] "POST /wp-login.php HTTP/1.1" 302 0 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: wordpress-xmlrpc
+  service: wordpress
+  rule: wordpress-xmlrpc
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - positive
+  - wordpress
+  lines:
+  - 198.51.100.111 - - [06/Aug/2026:20:11:00 +0100] "POST /xmlrpc.php HTTP/1.1" 200 500 "-" "client"
+  repeat: 3
+  expected_ip: 198.51.100.111
+  expected_matches: 3
+  expected_bans: 1
+- id: wordpress-xmlrpc-get
+  service: wordpress
+  rule: wordpress-xmlrpc
+  format: combined
+  reference: https://nginx.org/en/docs/http/ngx_http_log_module.html
+  tags:
+  - negative
+  - method
+  lines:
+  - 198.51.100.111 - - [06/Aug/2026:20:11:01 +0100] "GET /xmlrpc.php HTTP/1.1" 405 10 "-" "browser"
+  expected_matches: 0
+  expected_bans: 0
+- id: portainer-unauthorized-client
+  service: portainer
+  rule: portainer-login
+  format: json
+  reference: https://docs.portainer.io/
+  tags:
+  - positive
+  - experimental
+  lines:
+  - '{"level":"warn","msg":"Unauthorized","client":"198.51.100.120","path":"/api/auth"}'
+  repeat: 5
+  expected_ip: 198.51.100.120
+  expected_matches: 5
+  expected_bans: 1
+- id: portainer-unauthorized-origin-ipv6
+  service: portainer
+  rule: portainer-login
+  format: json
+  reference: https://docs.portainer.io/
+  tags:
+  - positive
+  - experimental
+  - ipv6
+  lines:
+  - '{"message":"unauthorized","origin":"2001:db8::120","path":"/api/auth"}'
+  repeat: 5
+  expected_ip: 2001:db8::120
+  expected_matches: 5
+  expected_bans: 1
+- id: portainer-authorized
+  service: portainer
+  rule: portainer-login
+  format: json
+  reference: https://docs.portainer.io/
+  tags:
+  - negative
+  - experimental
+  - success
+  lines:
+  - '{"level":"info","msg":"Authorized","client":"198.51.100.120","path":"/api/auth"}'
+  expected_matches: 0
+  expected_bans: 0
+- id: recidive-other-rule
+  service: goban
+  rule: recidive
+  format: json
+  reference: docs/THREAT_MODEL.md
+  tags:
+  - positive
+  - internal
+  lines:
+  - '{"action":"ban","ip":"198.51.100.130","rule":"sshd","decision_id":"01TEST"}'
+  repeat: 5
+  expected_ip: 198.51.100.130
+  expected_matches: 5
+  expected_bans: 1
+- id: recidive-self-excluded
+  service: goban
+  rule: recidive
+  format: json
+  reference: docs/THREAT_MODEL.md
+  tags:
+  - negative
+  - internal
+  - feedback-loop
+  lines:
+  - '{"action":"ban","ip":"198.51.100.130","rule":"recidive","decision_id":"01TEST"}'
+  expected_matches: 0
+  expected_bans: 0

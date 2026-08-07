@@ -136,3 +136,36 @@ func TestCaptureAddrAcceptsProxyPeerForms(t *testing.T) {
 		}
 	}
 }
+
+func TestDuplicateNamedCaptureAlternatives(t *testing.T) {
+	m, err := New(`(?:"ip":"(?P<ip>[^"]+)".*"status":401|"status":401.*"ip":"(?P<ip>[^"]+)")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		line string
+		want string
+	}{
+		{`{"ip":"198.51.100.10","status":401}`, "198.51.100.10"},
+		{`{"status":401,"ip":"2001:db8::10"}`, "2001:db8::10"},
+	} {
+		ip, _, ok := m.Match(tc.line)
+		if !ok || ip.String() != tc.want {
+			t.Fatalf("Match(%q)=(%s,%v), want %s,true", tc.line, ip, ok, tc.want)
+		}
+	}
+}
+
+func TestDuplicateNamedCaptureReturnsFirstParticipatingValue(t *testing.T) {
+	m, err := New(`(?:peer=(?P<peer>\S+) client=(?P<ip>\S+)|client=(?P<ip>\S+) peer=(?P<peer>\S+))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := `client=198.51.100.11 peer=192.0.2.2`
+	if got := m.Capture("peer", line); got != "192.0.2.2" {
+		t.Fatalf("Capture(peer)=%q", got)
+	}
+	if got, ok := m.CaptureAddr("peer", line); !ok || got.String() != "192.0.2.2" {
+		t.Fatalf("CaptureAddr(peer)=(%s,%v)", got, ok)
+	}
+}

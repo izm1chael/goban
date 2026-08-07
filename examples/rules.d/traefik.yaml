@@ -1,17 +1,16 @@
-# Traefik reverse-proxy: bans on repeated 401/403/429 from the same client.
-# Use a docker source named "traefik-container" pointing at the traefik
-# container, or a file source pointing at traefik's access.log.
+# Traefik reverse-proxy access logs. JSON object field ordering is not part of
+# the format contract, so each rule supports ClientHost before or after status.
 rules:
   - name: traefik-auth
     source: traefik-container
-    regex: '"ClientHost":"(?P<ip>[^"]+)"[^}]*"DownstreamStatus":(?:401|403)'
+    regex: '(?:"ClientHost":"(?P<ip>[^"]+)"[^}]*"DownstreamStatus":(?:401|403)|"DownstreamStatus":(?:401|403)[^}]*"ClientHost":"(?P<ip>[^"]+)")'
     max_retries: 5
     findtime: 10m
     bantime: 6h
 
   - name: traefik-ratelimit
     source: traefik-container
-    regex: '"ClientHost":"(?P<ip>[^"]+)"[^}]*"DownstreamStatus":429'
+    regex: '(?:"ClientHost":"(?P<ip>[^"]+)"[^}]*"DownstreamStatus":429|"DownstreamStatus":429[^}]*"ClientHost":"(?P<ip>[^"]+)")'
     max_retries: 10
     findtime: 1m
     bantime: 1h

@@ -3,13 +3,14 @@ BIN_DIR := bin
 DIST_DIR := dist
 DAEMON := $(BIN_DIR)/goban-daemon
 CLIENT := $(BIN_DIR)/goban-client
+CORPUS := $(BIN_DIR)/goban-corpus
 LDFLAGS := -s -w
 PKGS := ./...
 VERSION ?= 1.0.0
 ARCH    ?= amd64
 export ARCH
 
-.PHONY: all build build-journald test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
+.PHONY: all build build-journald corpus corpus-generate corpus-external fuzz-short test test-race vet lint verify-release test-fault test-reload test-kernel package-smoke docker-build docker-build-journald clean tidy package package-deb package-rpm package-apk package-arch man
 
 all: build
 
@@ -17,17 +18,31 @@ build:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(DAEMON) ./cmd/goban-daemon
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
 
 build-journald:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=1 go build -trimpath -tags=journald -ldflags="$(LDFLAGS)" -o $(DAEMON) ./cmd/goban-daemon
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CLIENT) ./cmd/goban-client
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(CORPUS) ./cmd/goban-corpus
 
 test:
 	go test $(PKGS)
 
 test-race:
 	go test -race $(PKGS)
+
+corpus:
+	go run ./cmd/goban-corpus test
+
+corpus-generate:
+	test/corpus/generate.sh
+
+corpus-external:
+	test/corpus/external.sh
+
+fuzz-short:
+	go test ./internal/matcher -run '^$$' -fuzz FuzzMatcherNeverPanics -fuzztime 20s
 
 vet:
 	go vet $(PKGS)
@@ -37,9 +52,9 @@ lint:
 
 # Non-privileged release gate. Kernel and package verification remain separate
 # because they need root/network namespaces and container/package tooling.
-verify-release: vet test-race
+verify-release: vet test-race corpus
 	@test -z "$$(gofmt -l cmd internal benchmark)" || { echo "gofmt required:"; gofmt -l cmd internal benchmark; exit 1; }
-	bash -n test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/reload/run.sh test/integration/package/run.sh test/fault/run.sh
+	bash -n test/corpus/run.sh test/corpus/generate.sh test/corpus/external.sh test/integration/kernel/run.sh test/integration/kernel/ttl-refresh.sh test/integration/reload/run.sh test/integration/package/run.sh test/fault/run.sh
 	go test -run TestCoreRuleFixtures ./internal/config
 
 # Extended lifecycle/fault repetition.

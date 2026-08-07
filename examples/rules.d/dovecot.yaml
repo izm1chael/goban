@@ -1,8 +1,9 @@
-# Dovecot IMAP / POP3 brute force.
+# Dovecot IMAP / POP3 / submission login failures. Dovecot versions and
+# syslog configurations differ on whether a leading "dovecot:" is present.
 rules:
   - name: dovecot
     source: mail-log
-    regex: 'dovecot: (?:imap|pop3)-login: (?:Aborted login|Disconnected)(?: \([^)]*\))?: .* rip=(?P<ip>[^,]+)'
+    regex: '(?:dovecot:\s*)?(?:imap|pop3|submission|smtp)-login: (?i:(?:Authentication failure|Aborted login|Disconnected \((?:auth failed|authentication failed)|Aborted login \(\d+ authentication attempts))[^\n]*\brip=(?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)'
     max_retries: 5
     findtime: 10m
     bantime: 12h

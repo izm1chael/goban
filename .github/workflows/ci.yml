@@ -36,6 +36,12 @@ jobs:
         run: go vet ./...
       - name: go test -race
         run: go test -race ./...
+      - name: curated rule corpus
+        run: make corpus
+      - name: deterministic generated corpus smoke
+        run: |
+          go run ./cmd/goban-corpus generate --out /tmp/goban-generated.log --lines 25000 --seed 20260806 --verify
+          go run ./cmd/goban-corpus scan --rule sshd --file /tmp/goban-generated.log --sample 0
 
   build:
     name: build binaries

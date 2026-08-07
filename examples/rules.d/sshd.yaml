@@ -1,20 +1,21 @@
-# OpenSSH brute force / scanner protection.
-# Matches both "invalid user" (anonymous scanners) and "Failed password" against
-# known accounts. Source defaults to "auth-log" — change if your config uses a
-# different source name.
+# OpenSSH authentication failure protection.
+#
+# The core rule intentionally keys on terminal "Failed ..." authentication
+# records rather than the earlier "Invalid user" preauth message, avoiding two
+# strikes for one login attempt on distributions that emit both lines.
 rules:
   - name: sshd
     source: auth-log
-    regex: 'Failed password for (?:invalid user )?\S+ from (?P<ip>\S+) port'
+    regex: '(?:sshd(?:-session)?\[\d+\]: )?Failed (?:password|publickey|keyboard-interactive(?:/pam)?|none) for (?:invalid user )?\S+ from (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)(?: port \d+)?(?: ssh\d)?(?: \[preauth\])?$'
     max_retries: 3
     findtime: 10m
     bantime: 24h
 
   - name: sshd-aggressive
     source: auth-log
-    # Catches a wider set of sshd failure modes including key-exchange aborts
-    # and "User X from <ip> not allowed because not listed in AllowUsers".
-    regex: '(?:Invalid user|Failed (?:password|keyboard-interactive|publickey)|User \S+ from|Connection (?:closed|reset) by (?:invalid user )?\S+) (?:.*?from )?(?P<ip>\S+)(?: port|$)'
+    # Optional wider mode for scanners that never reach a terminal password
+    # failure. It still excludes ordinary connection-close messages.
+    regex: '(?:Invalid user \S+ from (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)(?: port \d+)?|User \S+ from (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+) not allowed because .+|ROOT LOGIN REFUSED FROM (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+)(?: port \d+)?|error: PAM: [Aa]uthentication (?:failure|error) for \S+ from (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+))'
     max_retries: 5
     findtime: 10m
     bantime: 24h

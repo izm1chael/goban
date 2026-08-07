@@ -1,23 +1,24 @@
-# Apache HTTPD rules. Define a source named "apache-error" (error log) and/or
-# "apache-access" (combined access log) to use these.
+# Apache HTTPD rules. Define "apache-error" and/or "apache-access" sources.
+# The auth parser accepts the default Apache 2.4 error-log envelope, optional
+# AH message identifiers, IPv4:port, and bracketed IPv6:port forms.
 rules:
   - name: apache-auth
     source: apache-error
-    regex: '\[client (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+?)(?::\d+)?\] (?:user .* authentication failure|user .* not found|password mismatch)'
+    regex: '^\[[^]]+\](?: \[[^]]+\])* \[client (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+?)(?::\d+)?\] (?:AH\d{5}: )?(?i:(?:user .*?(?:authentication failure|not found|password mismatch)|password mismatch|authentication failure))'
     max_retries: 5
     findtime: 10m
     bantime: 6h
 
   - name: apache-noscript
     source: apache-access
-    regex: '^(?P<ip>\S+) .* "(?:GET|POST|HEAD) [^"]*\.(?:php|asp|aspx|cgi|pl|exe)[^"]*" (?:404|403)'
+    regex: '^(?P<ip>\S+) \S+ \S+ \[[^]]+\] "(?:GET|POST|HEAD) [^" ]*\.(?:php|asp|aspx|cgi|pl|exe)(?:[? /][^"]*)?" (?:404|403)(?: \S+)?'
     max_retries: 6
     findtime: 10m
     bantime: 6h
 
   - name: apache-overflows
     source: apache-error
-    regex: '\[client (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+?)(?::\d+)?\] (?:Invalid (?:URI in request|method in request)|request failed: URI too long)'
+    regex: '\[client (?P<ip>\[[0-9A-Fa-f:]+\]|[0-9A-Fa-f:.]+?)(?::\d+)?\] (?:AH\d{5}: )?(?:Invalid (?:URI in request|method in request)|request failed: URI too long|request failed: error reading the headers)'
     max_retries: 2
     findtime: 10m
     bantime: 24h

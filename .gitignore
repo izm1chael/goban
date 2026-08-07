@@ -50,3 +50,6 @@ benchmark/*.log
 benchmark/*.csv
 benchmark/gen/gen
 benchmark/sampler/sampler
+
+# Optional third-party and generated rule corpora
+.cache/goban-corpus/
