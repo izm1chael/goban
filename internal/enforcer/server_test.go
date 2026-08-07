@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os/user"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,5 +215,150 @@ func TestPolicyReloadVerifiesFingerprintBeforeSwap(t *testing.T) {
 	}
 	if health.PolicyFingerprint != newPolicy.Fingerprint() {
 		t.Fatalf("policy fingerprint=%s want=%s", health.PolicyFingerprint, newPolicy.Fingerprint())
+	}
+}
+
+type driftBanner struct {
+	inner   *banner.NoopBanner
+	mu      sync.Mutex
+	drift   bool
+	repairs int
+}
+
+func newDriftBanner() *driftBanner                     { return &driftBanner{inner: banner.NewNoop()} }
+func (d *driftBanner) Setup(ctx context.Context) error { return d.inner.Setup(ctx) }
+func (d *driftBanner) Ban(ctx context.Context, ip netip.Addr, rule string, ttl time.Duration) error {
+	return d.inner.Ban(ctx, ip, rule, ttl)
+}
+func (d *driftBanner) BanBatch(ctx context.Context, reqs []banner.BanRequest) error {
+	return d.inner.BanBatch(ctx, reqs)
+}
+func (d *driftBanner) Unban(ctx context.Context, ip netip.Addr) error     { return d.inner.Unban(ctx, ip) }
+func (d *driftBanner) List(ctx context.Context) ([]banner.BanInfo, error) { return d.inner.List(ctx) }
+func (d *driftBanner) Close(ctx context.Context, flush bool) error        { return d.inner.Close(ctx, flush) }
+func (d *driftBanner) Diagnostics(context.Context) []banner.Diagnostic {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.drift {
+		return []banner.Diagnostic{{Name: "hook", Status: "fail", Detail: "injected drift"}}
+	}
+	return []banner.Diagnostic{{Name: "hook", Status: "pass", Detail: "ok"}}
+}
+func (d *driftBanner) Repair(context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.repairs++
+	d.drift = false
+	return nil
+}
+
+func TestServerAutomaticallyRepairsDetectedFirewallDrift(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newDriftBanner()
+	sock := filepath.Join(t.TempDir(), "enforcer.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := New(b, "test", sock, current.Username, nil, zerolog.Nop())
+	s.SetReconcileInterval(20 * time.Millisecond)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(context.Background())
+	client := unixHTTPClient(sock)
+	postJSON(t, client, "/v1/setup", nil, http.StatusOK)
+	b.mu.Lock()
+	b.drift = true
+	b.mu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		b.mu.Lock()
+		repaired := b.repairs > 0 && !b.drift
+		b.mu.Unlock()
+		if repaired {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	b.mu.Lock()
+	repairs, drift := b.repairs, b.drift
+	b.mu.Unlock()
+	if repairs != 1 || drift {
+		t.Fatalf("repairs=%d drift=%t, want one successful repair", repairs, drift)
+	}
+	resp, err := client.Get("http://enforcer/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var health enforcerproto.HealthResp
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
+	if health.RepairCount != 1 || health.LastRepair.IsZero() || health.LastReconcile.IsZero() {
+		t.Fatalf("unexpected reconcile health: %+v", health)
+	}
+}
+
+type blockingDiagnosticBanner struct {
+	*banner.NoopBanner
+	entered sync.Once
+	seen    chan struct{}
+	mu      sync.Mutex
+	closed  bool
+}
+
+func newBlockingDiagnosticBanner() *blockingDiagnosticBanner {
+	return &blockingDiagnosticBanner{NoopBanner: banner.NewNoop(), seen: make(chan struct{})}
+}
+
+func (b *blockingDiagnosticBanner) Diagnostics(ctx context.Context) []banner.Diagnostic {
+	b.entered.Do(func() { close(b.seen) })
+	<-ctx.Done()
+	return []banner.Diagnostic{{Name: "hook", Status: "pass", Detail: "cancelled"}}
+}
+
+func (b *blockingDiagnosticBanner) Repair(context.Context) error { return nil }
+
+func (b *blockingDiagnosticBanner) Close(ctx context.Context, flush bool) error {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	return b.NoopBanner.Close(ctx, flush)
+}
+
+func TestServerStopWaitsForReconcileLoopBeforeBackendClose(t *testing.T) {
+	current, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := newBlockingDiagnosticBanner()
+	sock := filepath.Join(t.TempDir(), "enforcer.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := New(b, "test", sock, current.Username, nil, zerolog.Nop())
+	s.SetReconcileInterval(time.Millisecond)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	client := unixHTTPClient(sock)
+	postJSON(t, client, "/v1/setup", nil, http.StatusOK)
+	select {
+	case <-b.seen:
+	case <-time.After(time.Second):
+		t.Fatal("reconcile diagnostics did not start")
+	}
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if err := s.Stop(stopCtx); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	b.mu.Lock()
+	closed := b.closed
+	b.mu.Unlock()
+	if !closed {
+		t.Fatal("backend was not closed after reconcile loop drained")
 	}
 }

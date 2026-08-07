@@ -574,6 +574,25 @@ goban-soak report --run /var/lib/goban/soak/rc1
 Optional reload and kernel-probe exercises are disabled unless explicitly
 requested. See [soak testing](docs/SOAK_TESTING.md).
 
+## Final hardening and release freeze
+
+GoBan's 1.0 scope is frozen. Split-mode installations automatically reconcile
+GoBan-owned firewall hook drift (default every 30 seconds), while preserving
+active nftables decision TTLs. Optional AppArmor and SELinux confinement is
+shipped under `/usr/share/goban/security/` and enabled explicitly after the
+operator confirms configured log paths.
+
+The canonical ship gate is:
+
+```bash
+make release-gate
+```
+
+It combines race/invariant/corpus/chaos checks and deliberately refuses to call
+a build releasable until privileged kernel, package-lifecycle, and real soak
+evidence has also been attached. See [final hardening](docs/FINAL_HARDENING.md)
+and [MAC confinement](docs/MAC_CONFINEMENT.md).
+
 ## Release trust
 
 Tagged release artifacts include checksums, SPDX SBOMs, and GitHub provenance

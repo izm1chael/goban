@@ -85,6 +85,15 @@ contents:
   - src: ../docs
     dst: /usr/share/doc/goban/docs
     type: tree
+  - src: ../deploy/apparmor
+    dst: /usr/share/goban/security/apparmor
+    type: tree
+  - src: ../deploy/selinux
+    dst: /usr/share/goban/security/selinux
+    type: tree
+  - src: ../scripts/security
+    dst: /usr/share/goban/security/scripts
+    type: tree
   - src: ../deploy/goban-persist.service
     dst: /usr/lib/systemd/system/goban-persist.service
     file_info:

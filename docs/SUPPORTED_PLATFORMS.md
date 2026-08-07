@@ -32,3 +32,11 @@ logs without restoring broad root capabilities. The single-container image is a
 documented direct-mode compatibility deployment and has a larger privilege
 footprint. Docker-socket sources are treated separately because Docker daemon
 access is root-equivalent.
+
+## Mandatory access control
+
+AppArmor confinement is release-validated on the supported Ubuntu/Debian test
+host. SELinux policy source is compiled against the Fedora/RHEL policy-devel
+toolchain during release verification. MAC remains opt-in because configured
+log locations are deployment-specific; enabling a generic profile that cannot
+read a custom source would create a silent protection gap.

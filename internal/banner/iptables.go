@@ -158,6 +158,10 @@ func (b *IPTables) ensureRule(ctx context.Context, ipt, set string) error {
 // Diagnostics verifies that every configured packet path still contains the
 // exact set-backed DROP rule installed by Setup. This catches firewall reloads
 // or external automation that removed a hook while leaving the ipset intact.
+// Repair restores missing GoBan-owned ipset hooks. Setup is deliberately
+// idempotent for this backend, so repair never flushes unrelated firewall state.
+func (b *IPTables) Repair(ctx context.Context) error { return b.Setup(ctx) }
+
 func (b *IPTables) Diagnostics(ctx context.Context) []Diagnostic {
 	if len(b.Chains) == 0 {
 		return []Diagnostic{{

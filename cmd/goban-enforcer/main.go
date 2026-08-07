@@ -79,6 +79,7 @@ func run() error {
 	}
 	backend := firewall.NewLocal(cfg, *log)
 	srv := enforcer.New(backend, backendName, cfg.Enforcer.SocketPath, cfg.Enforcer.AllowedUser, policy, *log)
+	srv.SetReconcileInterval(cfg.Enforcer.ReconcileInterval)
 	srv.SetPolicyLoader(func() (*enforcer.Policy, error) {
 		fresh, err := config.LoadEffective(*configPath, *rulesDir)
 		if err != nil {

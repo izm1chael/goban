@@ -43,6 +43,13 @@ type Diagnoser interface {
 	Diagnostics(ctx context.Context) []Diagnostic
 }
 
+// Reconciler is implemented by backends that can restore only GoBan-owned
+// firewall objects after external firewall reloads or drift. Repair must be
+// idempotent and preserve active decisions where the kernel still exposes them.
+type Reconciler interface {
+	Repair(ctx context.Context) error
+}
+
 // PolicyReloader is implemented by split-mode backends whose privileged
 // safety policy is loaded independently from root-managed configuration.
 // expectedFingerprint proves both sides resolved the same allowlist semantics.

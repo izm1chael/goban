@@ -225,6 +225,11 @@ func TestEnforcerConfigValidation(t *testing.T) {
 		t.Fatal("relative enforcer socket should be rejected")
 	}
 	cfg.Enforcer.SocketPath = "/run/goban-enforcer/enforcer.sock"
+	cfg.Enforcer.ReconcileInterval = 500 * time.Millisecond
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("sub-second reconcile interval should be rejected")
+	}
+	cfg.Enforcer.ReconcileInterval = time.Second
 	cfg.Enforcer.Mode = "magic"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("unknown enforcer mode should be rejected")
@@ -244,5 +249,27 @@ func TestEnforcementPolicyFingerprintIsSemantic(t *testing.T) {
 	b.Rules[0].Allowlist = []string{"192.0.3.0/24"}
 	if EnforcementPolicyFingerprint(a) == EnforcementPolicyFingerprint(b) {
 		t.Fatal("policy change must change fingerprint")
+	}
+}
+
+func TestNFTablesAutomaticReconciliationRequiresOwnedTableNamespace(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Sources = []SourceConfig{{Type: "file", Name: "auth", Path: "/tmp/auth.log"}}
+	cfg.Rules = []RuleConfig{{Name: "sshd", Source: "auth", Regex: `(?P<ip>192\\.0\\.2\\.1)`, MaxRetries: 1, FindTime: time.Minute, BanTime: time.Minute}}
+	cfg.Enforcer.Mode = "split"
+	cfg.Banner.Backend = "nftables"
+	cfg.Banner.Table = "shared_firewall"
+	cfg.Enforcer.ReconcileInterval = time.Second
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("automatic repair of a non-GoBan-owned nftables table should be rejected")
+	}
+	cfg.Enforcer.ReconcileInterval = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("legacy custom nftables table should remain usable when automatic destructive repair is disabled: %v", err)
+	}
+	cfg.Enforcer.ReconcileInterval = time.Second
+	cfg.Banner.Table = "goban_prod"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("GoBan-owned nftables table namespace rejected: %v", err)
 	}
 }

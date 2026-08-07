@@ -101,5 +101,7 @@ grep -Fxq 'User=goban-enforcer' "$ROOT_DIR/deploy/goban-enforcer.service"
 grep -Fxq 'Group=goban' "$ROOT_DIR/deploy/goban-enforcer.service"
 grep -Fxq 'AmbientCapabilities=CAP_NET_ADMIN' "$ROOT_DIR/deploy/goban-enforcer.service"
 grep -Fxq 'CapabilityBoundingSet=CAP_NET_ADMIN' "$ROOT_DIR/deploy/goban-enforcer.service"
+grep -Fxq 'MemoryDenyWriteExecute=true' "$ROOT_DIR/deploy/goban.service"
+grep -Fxq 'PrivateDevices=true' "$ROOT_DIR/deploy/goban-enforcer.service"
 
 echo 'PASS: package lifecycle hooks preserve upgrades and stop real removals'

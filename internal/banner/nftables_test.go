@@ -75,6 +75,7 @@ func (m *mockNFTablesCommander) ListElements(ctx context.Context, table, set str
 
 func (m *mockNFTablesCommander) DestroyTable(ctx context.Context, name string) error {
 	m.destroyed = append(m.destroyed, name)
+	m.stored = make(map[string]map[netip.Addr]nftables.ListedEntry)
 	return nil
 }
 
@@ -246,5 +247,37 @@ func TestNFTablesDiagnosticsFailsWhenExpectedSetHookIsMissing(t *testing.T) {
 	checks := b.Diagnostics(context.Background())
 	if len(checks) != 1 || checks[0].Status != "fail" {
 		t.Fatalf("checks=%+v, want one failure", checks)
+	}
+}
+
+func TestNFTablesRepairPreservesActiveDecisionTTL(t *testing.T) {
+	b := NewNFTables("goban", "v4", "v6", "input", true)
+	mock := newMockNFT()
+	b.SetCommander(mock)
+	ip := netip.MustParseAddr("198.51.100.44")
+	mock.stored["v4"] = map[netip.Addr]nftables.ListedEntry{
+		ip: {IP: ip, Timeout: 60 * time.Second, ExpiresIn: 45 * time.Second},
+	}
+	b.ruleOf[ip] = "sshd"
+	if err := b.Repair(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(mock.destroyed) != 1 || len(mock.setupCalls) != 1 {
+		t.Fatalf("destroy=%v setup=%d", mock.destroyed, len(mock.setupCalls))
+	}
+	if len(mock.adds) != 1 || mock.adds[0].ip != ip || mock.adds[0].ttl != 45*time.Second {
+		t.Fatalf("restored adds=%+v", mock.adds)
+	}
+}
+
+func TestNFTablesRepairRefusesNonOwnedTable(t *testing.T) {
+	b := NewNFTables("shared_firewall", "v4", "v6", "input", true)
+	mock := newMockNFT()
+	b.SetCommander(mock)
+	if err := b.Repair(context.Background()); err == nil {
+		t.Fatal("expected repair to refuse a non-GoBan-owned table")
+	}
+	if len(mock.destroyed) != 0 || len(mock.setupCalls) != 0 {
+		t.Fatalf("repair touched non-owned table: destroyed=%v setup=%d", mock.destroyed, len(mock.setupCalls))
 	}
 }

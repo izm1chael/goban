@@ -36,6 +36,13 @@ docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_deb:/tmp/goban.deb:ro" d
   ! grep -q '^\[Install\]' /usr/lib/systemd/system/goban-enforcer.service
   test "$(stat -c %G /etc/goban)" = goban
   test -f /usr/share/goban/rules-available/sshd.yaml
+  test -f /usr/share/goban/security/apparmor/usr.bin.goban-daemon
+  test -f /usr/share/goban/security/apparmor/usr.bin.goban-enforcer
+  test -f /usr/share/goban/security/selinux/goban.te
+  test -x /usr/share/goban/security/scripts/install-apparmor.sh
+  test -x /usr/share/goban/security/scripts/install-selinux.sh
+  grep -qx "MemoryDenyWriteExecute=true" /usr/lib/systemd/system/goban.service
+  grep -qx "PrivateDevices=true" /usr/lib/systemd/system/goban-enforcer.service
   test -f /etc/goban/rules.d/sshd.yaml
   test -f /etc/goban/rules.d/recidive.yaml
   test "$(stat -c %a /etc/goban/goban.yaml)" -le 640
@@ -61,6 +68,13 @@ docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_rpm:/tmp/goban.rpm:ro" r
   ! grep -q '^\[Install\]' /usr/lib/systemd/system/goban-enforcer.service
   test "$(stat -c %G /etc/goban)" = goban
   test -f /usr/share/goban/rules-available/sshd.yaml
+  test -f /usr/share/goban/security/apparmor/usr.bin.goban-daemon
+  test -f /usr/share/goban/security/apparmor/usr.bin.goban-enforcer
+  test -f /usr/share/goban/security/selinux/goban.te
+  test -x /usr/share/goban/security/scripts/install-apparmor.sh
+  test -x /usr/share/goban/security/scripts/install-selinux.sh
+  grep -qx "MemoryDenyWriteExecute=true" /usr/lib/systemd/system/goban.service
+  grep -qx "PrivateDevices=true" /usr/lib/systemd/system/goban-enforcer.service
   test -f /etc/goban/rules.d/sshd.yaml
 '
 
@@ -85,6 +99,13 @@ docker run --rm -e EXPECTED_VERSION="$VERSION" -v "$abs_arch:/tmp/goban.pkg.tar.
   ! grep -q '^\[Install\]' /usr/lib/systemd/system/goban-enforcer.service
   test "$(stat -c %G /etc/goban)" = goban
   test -f /usr/share/goban/rules-available/sshd.yaml
+  test -f /usr/share/goban/security/apparmor/usr.bin.goban-daemon
+  test -f /usr/share/goban/security/apparmor/usr.bin.goban-enforcer
+  test -f /usr/share/goban/security/selinux/goban.te
+  test -x /usr/share/goban/security/scripts/install-apparmor.sh
+  test -x /usr/share/goban/security/scripts/install-selinux.sh
+  grep -qx "MemoryDenyWriteExecute=true" /usr/lib/systemd/system/goban.service
+  grep -qx "PrivateDevices=true" /usr/lib/systemd/system/goban-enforcer.service
   test -f /etc/goban/rules.d/sshd.yaml
 '
 

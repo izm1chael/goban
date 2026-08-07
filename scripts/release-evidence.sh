@@ -30,7 +30,12 @@ if [[ -x bin/goban-corpus ]]; then
   bin/goban-corpus test --json > "$OUT/curated-corpus.json"
 fi
 sha256sum bin/goban-* > "$OUT/SHA256SUMS" 2>/dev/null || true
-cp docs/RELEASE_CHECKLIST.md docs/THREAT_MODEL.md docs/PRIVILEGE_SEPARATION.md docs/EXTERNAL_REVIEW.md "$OUT/" 2>/dev/null || true
+cp docs/RELEASE_CHECKLIST.md docs/THREAT_MODEL.md docs/PRIVILEGE_SEPARATION.md docs/FINAL_HARDENING.md docs/MAC_CONFINEMENT.md docs/EXTERNAL_REVIEW.md "$OUT/" 2>/dev/null || true
+mkdir -p "$OUT/security"
+sha256sum deploy/apparmor/* deploy/selinux/* > "$OUT/security/policy-SHA256SUMS"
+if command -v apparmor_parser >/dev/null 2>&1; then
+  test/security/mac.sh > "$OUT/security/mac-validation.txt" 2>&1 || { cat "$OUT/security/mac-validation.txt" >&2; exit 1; }
+fi
 if [[ -n ${GOBAN_SOAK_RUN:-} ]]; then
   cp "$GOBAN_SOAK_RUN"/report.json "$GOBAN_SOAK_RUN"/report.md "$OUT/" 2>/dev/null || {
     echo "GOBAN_SOAK_RUN did not contain report.json/report.md" >&2

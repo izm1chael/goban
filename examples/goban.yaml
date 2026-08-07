@@ -83,6 +83,9 @@ enforcer:
   mode: direct
   socket_path: /run/goban-enforcer/enforcer.sock
   allowed_user: goban
+  # Split-mode helper verifies/restores only GoBan-owned firewall hooks.
+  # Set 0s to disable automatic drift repair.
+  reconcile_interval: 30s
 
 banner:
   backend: iptables

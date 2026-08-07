@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -83,9 +84,10 @@ type BannerConfig struct {
 // single-process firewall path; split routes typed decisions to goban-enforcer
 // over a private Unix socket authenticated with Linux peer credentials.
 type EnforcerConfig struct {
-	Mode        string `yaml:"mode"`         // direct | split
-	SocketPath  string `yaml:"socket_path"`  // split mode only
-	AllowedUser string `yaml:"allowed_user"` // split mode only; exact detector peer UID
+	Mode              string        `yaml:"mode"`               // direct | split
+	SocketPath        string        `yaml:"socket_path"`        // split mode only
+	AllowedUser       string        `yaml:"allowed_user"`       // split mode only; exact detector peer UID
+	ReconcileInterval time.Duration `yaml:"reconcile_interval"` // split helper drift-repair cadence; 0 disables
 }
 
 // RuleDefaults supplies fallback per-rule settings when a rule leaves them
@@ -177,9 +179,10 @@ func DefaultConfig() *Config {
 			ForwardChain:   "forward",
 		},
 		Enforcer: EnforcerConfig{
-			Mode:        "direct",
-			SocketPath:  "/run/goban-enforcer/enforcer.sock",
-			AllowedUser: "goban",
+			Mode:              "direct",
+			SocketPath:        "/run/goban-enforcer/enforcer.sock",
+			AllowedUser:       "goban",
+			ReconcileInterval: 30 * time.Second,
 		},
 	}
 }
@@ -320,6 +323,12 @@ func (c *Config) validateEnforcer() error {
 	case "", "direct":
 		return nil
 	case "split":
+		if c.Enforcer.ReconcileInterval < 0 || (c.Enforcer.ReconcileInterval > 0 && c.Enforcer.ReconcileInterval < time.Second) {
+			return fmt.Errorf("enforcer.reconcile_interval must be 0 (disabled) or at least 1s")
+		}
+		if c.Enforcer.ReconcileInterval > 0 && c.Banner.Backend == "nftables" && !ownedNFTTableName(c.Banner.Table) {
+			return fmt.Errorf("automatic nftables reconciliation requires banner.table to be %q or use the goban_ prefix; set enforcer.reconcile_interval=0 to manage a legacy custom table without destructive repair", "goban")
+		}
 		if c.Enforcer.SocketPath == "" || !filepath.IsAbs(c.Enforcer.SocketPath) {
 			return fmt.Errorf("enforcer.socket_path must be an absolute path when mode=split")
 		}
@@ -467,6 +476,10 @@ func validIPTablesChain(s string) bool {
 }
 func validNFTName(s string) bool {
 	return len(s) >= 1 && len(s) <= 31 && firewallChainPattern.MatchString(s)
+}
+
+func ownedNFTTableName(s string) bool {
+	return s == "goban" || strings.HasPrefix(s, "goban_")
 }
 
 func captureNames(re *regexp.Regexp) map[string]struct{} {

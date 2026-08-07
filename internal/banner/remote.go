@@ -152,6 +152,19 @@ func (r *Remote) Diagnostics(ctx context.Context) []Diagnostic {
 		}}
 	}
 	out := []Diagnostic{{Name: "privileged enforcer", Status: "pass", Detail: fmt.Sprintf("protocol v%d connected to %s backend", health.Protocol, health.Backend)}}
+	if health.ReconcileInterval > 0 {
+		detail := fmt.Sprintf("automatic firewall reconciliation every %s; repairs=%d", health.ReconcileInterval, health.RepairCount)
+		status := "pass"
+		remediation := ""
+		if health.LastRepairError != "" {
+			status = "fail"
+			detail += "; last repair failed: " + health.LastRepairError
+			remediation = "inspect goban-enforcer logs and restore firewall backend availability"
+		}
+		out = append(out, Diagnostic{Name: "firewall drift reconciliation", Status: status, Detail: detail, Remediation: remediation})
+	} else {
+		out = append(out, Diagnostic{Name: "firewall drift reconciliation", Status: "warn", Detail: "automatic firewall drift repair is disabled", Remediation: "set enforcer.reconcile_interval to at least 30s on production hosts"})
+	}
 	helperState := procinfo.Status{UID: health.UID, GID: health.GID, CapEff: health.CapEff, CapBnd: health.CapBnd, CapAmb: health.CapAmb, NoNewPrivs: health.NoNewPrivs}
 	if err := privilege.ValidateEnforcer(helperState); err != nil {
 		out = append(out, Diagnostic{

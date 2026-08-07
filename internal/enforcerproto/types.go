@@ -7,16 +7,21 @@ import "time"
 const Version = 1
 
 type HealthResp struct {
-	Protocol          int    `json:"protocol"`
-	Backend           string `json:"backend"`
-	Ready             bool   `json:"ready"`
-	PolicyFingerprint string `json:"policy_fingerprint"`
-	UID               int    `json:"uid"`
-	GID               int    `json:"gid"`
-	CapEff            string `json:"cap_eff"`
-	CapBnd            string `json:"cap_bnd"`
-	CapAmb            string `json:"cap_amb"`
-	NoNewPrivs        bool   `json:"no_new_privs"`
+	Protocol          int           `json:"protocol"`
+	Backend           string        `json:"backend"`
+	Ready             bool          `json:"ready"`
+	PolicyFingerprint string        `json:"policy_fingerprint"`
+	UID               int           `json:"uid"`
+	GID               int           `json:"gid"`
+	CapEff            string        `json:"cap_eff"`
+	CapBnd            string        `json:"cap_bnd"`
+	CapAmb            string        `json:"cap_amb"`
+	NoNewPrivs        bool          `json:"no_new_privs"`
+	ReconcileInterval time.Duration `json:"reconcile_interval"`
+	LastReconcile     time.Time     `json:"last_reconcile,omitempty"`
+	LastRepair        time.Time     `json:"last_repair,omitempty"`
+	RepairCount       uint64        `json:"repair_count"`
+	LastRepairError   string        `json:"last_repair_error,omitempty"`
 }
 
 type ReloadPolicyRequest struct {

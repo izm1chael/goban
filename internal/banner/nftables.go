@@ -93,6 +93,86 @@ func (b *NFTables) Setup(ctx context.Context) error {
 	return nil
 }
 
+// Repair reconstructs GoBan's own nftables table when hook drift is detected.
+// Active set elements are snapshotted first and restored with their remaining
+// TTL after the table is recreated. GoBan never edits or flushes another
+// application's table.
+func (b *NFTables) Repair(ctx context.Context) error {
+	if !ownedNFTTableName(b.Table) {
+		return fmt.Errorf("refusing destructive nftables repair of non-GoBan-owned table %q; use table goban or a goban_ prefix", b.Table)
+	}
+	if b.cli == nil {
+		cli, err := nftables.New()
+		if err != nil {
+			return fmt.Errorf("open netlink nftables socket (need CAP_NET_ADMIN): %w", err)
+		}
+		b.cli = cli
+		b.ownCli = true
+	}
+
+	// Snapshot each family independently so a partial-table failure never
+	// discards decisions that are still recoverable from the surviving set.
+	type saved struct {
+		ip     netip.Addr
+		rule   string
+		family nftables.EntryFamily
+		set    string
+		ttl    time.Duration
+	}
+	var existing []saved
+	foundOwnedSet := false
+	snapshot := func(set string, family nftables.EntryFamily) {
+		entries, err := b.cli.ListElements(ctx, b.Table, set)
+		if err != nil {
+			return
+		}
+		foundOwnedSet = true
+		for _, e := range entries {
+			ttl := e.ExpiresIn
+			if ttl <= 0 {
+				ttl = e.Timeout
+			}
+			if ttl < time.Second {
+				continue
+			}
+			ip := e.IP.Unmap()
+			existing = append(existing, saved{ip: ip, rule: b.ruleLookup(ip), family: family, set: set, ttl: ttl})
+		}
+	}
+	snapshot(b.SetV4, nftables.IPv4)
+	if b.UseIPv6 {
+		snapshot(b.SetV6, nftables.IPv6)
+	}
+
+	if foundOwnedSet {
+		if err := b.cli.DestroyTable(ctx, b.Table); err != nil {
+			return fmt.Errorf("nftables repair destroy owned table: %w", err)
+		}
+	} else {
+		// A missing/partial table is the common drift case. Best-effort removal
+		// clears any surviving children before Setup recreates the owned graph.
+		_ = b.cli.DestroyTable(ctx, b.Table)
+	}
+
+	if err := b.cli.Setup(ctx, nftables.SetupConfig{
+		Table:        b.Table,
+		SetV4:        b.SetV4,
+		SetV6:        b.SetV6,
+		Chain:        b.Chain,
+		ForwardChain: b.ForwardChain,
+		IPv6:         b.UseIPv6,
+	}); err != nil {
+		return fmt.Errorf("nftables repair setup: %w", err)
+	}
+
+	for _, item := range existing {
+		if err := b.cli.AddElement(ctx, b.Table, item.set, item.family, item.ip, item.ttl); err != nil {
+			return fmt.Errorf("nftables repair restore %s: %w", item.ip, err)
+		}
+	}
+	return nil
+}
+
 // Diagnostics uses the optional nft userspace inspector to verify that the
 // configured base chains still reference GoBan's address sets. The daemon's
 // enforcement hot path remains direct netlink; `nft` is used only for this
@@ -245,6 +325,10 @@ func (b *NFTables) Close(ctx context.Context, flush bool) error {
 		b.cli = nil
 	}
 	return nil
+}
+
+func ownedNFTTableName(name string) bool {
+	return name == "goban" || strings.HasPrefix(name, "goban_")
 }
 
 func (b *NFTables) routeFamily(ip netip.Addr) (string, nftables.EntryFamily, error) {

@@ -69,7 +69,7 @@ func TestRemoteBannerRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected list: %#v", list)
 	}
 	checks := b.Diagnostics(ctx)
-	if len(checks) != 3 || checks[0].Status != "pass" || checks[1].Status != "pass" {
+	if len(checks) != 4 || checks[0].Status != "pass" || checks[1].Status != "warn" || checks[2].Status != "pass" || checks[3].Status != "pass" {
 		t.Fatalf("unexpected diagnostics: %#v", checks)
 	}
 	if err := b.Unban(ctx, netip.MustParseAddr("192.0.2.44")); err != nil {

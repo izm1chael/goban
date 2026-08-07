@@ -1,0 +1,53 @@
+policy_module(goban, 1.0.0)
+
+require {
+    type etc_t;
+    type var_log_t;
+    type var_lib_t;
+    type var_run_t;
+    class capability net_admin;
+    class dir { add_name create getattr open read remove_name search setattr write };
+    class file { append create getattr ioctl lock open read rename setattr unlink write };
+    class sock_file { create getattr open read setattr unlink write };
+    class unix_stream_socket { connectto create getattr getopt read setopt shutdown write };
+    class netlink_netfilter_socket { bind create getattr getopt nlmsg_read nlmsg_write read setopt write };
+}
+
+type goban_t;
+type goban_exec_t;
+init_daemon_domain(goban_t, goban_exec_t)
+
+type goban_enforcer_t;
+type goban_enforcer_exec_t;
+init_daemon_domain(goban_enforcer_t, goban_enforcer_exec_t)
+
+type goban_etc_t;
+files_config_file(goban_etc_t)
+
+type goban_var_lib_t;
+files_type(goban_var_lib_t)
+
+type goban_log_t;
+logging_log_file(goban_log_t)
+
+type goban_var_run_t;
+files_pid_file(goban_var_run_t)
+
+allow goban_t goban_etc_t:dir search;
+allow goban_t goban_etc_t:file { getattr open read };
+manage_dirs_pattern(goban_t, goban_var_lib_t, goban_var_lib_t)
+manage_files_pattern(goban_t, goban_var_lib_t, goban_var_lib_t)
+manage_dirs_pattern(goban_t, goban_log_t, goban_log_t)
+manage_files_pattern(goban_t, goban_log_t, goban_log_t)
+manage_dirs_pattern(goban_t, goban_var_run_t, goban_var_run_t)
+manage_sock_files_pattern(goban_t, goban_var_run_t, goban_var_run_t)
+logging_read_all_logs(goban_t)
+allow goban_t goban_var_run_t:sock_file { getattr open read write };
+
+allow goban_enforcer_t self:capability net_admin;
+allow goban_enforcer_t self:netlink_netfilter_socket { bind create getattr getopt nlmsg_read nlmsg_write read setopt write };
+allow goban_enforcer_t goban_etc_t:dir search;
+allow goban_enforcer_t goban_etc_t:file { getattr open read };
+manage_dirs_pattern(goban_enforcer_t, goban_var_run_t, goban_var_run_t)
+manage_sock_files_pattern(goban_enforcer_t, goban_var_run_t, goban_var_run_t)
+allow goban_t goban_enforcer_t:unix_stream_socket connectto;

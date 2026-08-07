@@ -1,0 +1,7 @@
+/usr/bin/goban-daemon                         -- gen_context(system_u:object_r:goban_exec_t,s0)
+/usr/bin/goban-enforcer                       -- gen_context(system_u:object_r:goban_enforcer_exec_t,s0)
+/etc/goban(/.*)?                                 gen_context(system_u:object_r:goban_etc_t,s0)
+/var/lib/goban(/.*)?                             gen_context(system_u:object_r:goban_var_lib_t,s0)
+/var/log/goban(/.*)?                             gen_context(system_u:object_r:goban_log_t,s0)
+/run/goban(/.*)?                                 gen_context(system_u:object_r:goban_var_run_t,s0)
+/run/goban-enforcer(/.*)?                        gen_context(system_u:object_r:goban_var_run_t,s0)

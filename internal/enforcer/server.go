@@ -44,13 +44,21 @@ type Server struct {
 	policyLoader func() (*Policy, error)
 	log          zerolog.Logger
 
-	mu             sync.Mutex
-	setupMu        sync.Mutex
-	policyReloadMu sync.Mutex
-	policyMu       sync.RWMutex
-	listener       net.Listener
-	server         *http.Server
-	ready          bool
+	mu                sync.Mutex
+	setupMu           sync.Mutex
+	policyReloadMu    sync.Mutex
+	backendMu         sync.Mutex
+	policyMu          sync.RWMutex
+	listener          net.Listener
+	server            *http.Server
+	ready             bool
+	reconcileInterval time.Duration
+	lastReconcile     time.Time
+	lastRepair        time.Time
+	repairCount       uint64
+	lastRepairError   string
+	reconcileCancel   context.CancelFunc
+	reconcileWG       sync.WaitGroup
 }
 
 func New(backend banner.Banner, backendName, socketPath, allowedUser string, policy *Policy, log zerolog.Logger) *Server {
@@ -67,7 +75,13 @@ func (s *Server) SetPolicyLoader(loader func() (*Policy, error)) {
 	s.policyLoader = loader
 }
 
-func (s *Server) Start(_ context.Context) error {
+// SetReconcileInterval enables periodic, idempotent restoration of GoBan-owned
+// firewall hooks. A zero interval disables background drift repair.
+func (s *Server) SetReconcileInterval(interval time.Duration) {
+	s.reconcileInterval = interval
+}
+
+func (s *Server) Start(ctx context.Context) error {
 	uid, gid, err := lookupIdentity(s.allowedUser)
 	if err != nil {
 		return err
@@ -125,19 +139,38 @@ func (s *Server) Start(_ context.Context) error {
 		}
 	}()
 	s.log.Info().Str("socket", s.socketPath).Str("peer_user", s.allowedUser).Msg("privileged enforcer listening")
+	if s.reconcileInterval > 0 {
+		reconcileCtx, cancel := context.WithCancel(ctx)
+		s.mu.Lock()
+		s.reconcileCancel = cancel
+		s.mu.Unlock()
+		s.reconcileWG.Add(1)
+		go func() {
+			defer s.reconcileWG.Done()
+			s.reconcileLoop(reconcileCtx)
+		}()
+	}
 	return nil
 }
 
 func (s *Server) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	srv := s.server
+	cancel := s.reconcileCancel
+	s.reconcileCancel = nil
 	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	s.reconcileWG.Wait()
 	if srv != nil {
 		if err := srv.Shutdown(ctx); err != nil {
 			return err
 		}
 	}
+	s.backendMu.Lock()
 	_ = s.backend.Close(ctx, false)
+	s.backendMu.Unlock()
 	_ = os.Remove(s.socketPath)
 	return nil
 }
@@ -154,9 +187,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("read enforcer privilege state: %w", err))
 		return
 	}
+	s.mu.Lock()
+	lastReconcile, lastRepair, repairCount, lastRepairError := s.lastReconcile, s.lastRepair, s.repairCount, s.lastRepairError
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, enforcerproto.HealthResp{
 		Protocol: enforcerproto.Version, Backend: s.backendName, Ready: ready, PolicyFingerprint: fingerprint,
 		UID: proc.UID, GID: proc.GID, CapEff: proc.CapEff, CapBnd: proc.CapBnd, CapAmb: proc.CapAmb, NoNewPrivs: proc.NoNewPrivs,
+		ReconcileInterval: s.reconcileInterval, LastReconcile: lastReconcile, LastRepair: lastRepair, RepairCount: repairCount, LastRepairError: lastRepairError,
 	})
 }
 
@@ -167,7 +204,10 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.backend.Setup(r.Context()); err != nil {
+	s.backendMu.Lock()
+	err := s.backend.Setup(r.Context())
+	s.backendMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -253,7 +293,10 @@ func (s *Server) handleBanBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, banner.BanRequest{IP: ip, Rule: item.Rule, TTL: item.TTL})
 	}
-	if err := s.backend.BanBatch(r.Context(), out); err != nil {
+	s.backendMu.Lock()
+	err := s.backend.BanBatch(r.Context(), out)
+	s.backendMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -274,7 +317,10 @@ func (s *Server) handleUnban(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid ip: %w", err))
 		return
 	}
-	if err := s.backend.Unban(r.Context(), ip); err != nil {
+	s.backendMu.Lock()
+	err = s.backend.Unban(r.Context(), ip)
+	s.backendMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -285,7 +331,9 @@ func (s *Server) handleBans(w http.ResponseWriter, r *http.Request) {
 	if !s.requireReady(w) {
 		return
 	}
+	s.backendMu.Lock()
 	bans, err := s.backend.List(r.Context())
+	s.backendMu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -306,7 +354,9 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []enforcerproto.Diagnostic{{Name: "firewall hooks", Status: "skip", Detail: "backend does not expose diagnostics"}})
 		return
 	}
+	s.backendMu.Lock()
 	checks := d.Diagnostics(r.Context())
+	s.backendMu.Unlock()
 	out := make([]enforcerproto.Diagnostic, 0, len(checks))
 	for _, c := range checks {
 		out = append(out, enforcerproto.Diagnostic{Name: c.Name, Status: c.Status, Detail: c.Detail, Remediation: c.Remediation})
@@ -320,7 +370,10 @@ func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.backend.Close(r.Context(), req.Flush); err != nil {
+	s.backendMu.Lock()
+	err := s.backend.Close(r.Context(), req.Flush)
+	s.backendMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -328,6 +381,80 @@ func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 	s.ready = false
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
+}
+
+func (s *Server) repairBackend(ctx context.Context) error {
+	s.backendMu.Lock()
+	defer s.backendMu.Unlock()
+	if repairer, ok := s.backend.(banner.Reconciler); ok {
+		return repairer.Repair(ctx)
+	}
+	return s.backend.Setup(ctx)
+}
+
+func (s *Server) reconcileLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.reconcileInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.reconcileOnce(ctx)
+		}
+	}
+}
+
+func (s *Server) reconcileOnce(parent context.Context) {
+	s.mu.Lock()
+	ready := s.ready
+	s.mu.Unlock()
+	if !ready {
+		return
+	}
+	diagnoser, ok := s.backend.(banner.Diagnoser)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	s.backendMu.Lock()
+	checks := diagnoser.Diagnostics(ctx)
+	s.backendMu.Unlock()
+	now := time.Now().UTC()
+	drift := false
+	for _, check := range checks {
+		if check.Status == "fail" {
+			drift = true
+			break
+		}
+	}
+	s.mu.Lock()
+	s.lastReconcile = now
+	if !drift {
+		// A previous repair error is historical once diagnostics are healthy
+		// again (for example after an operator restored the hook manually).
+		s.lastRepairError = ""
+	}
+	s.mu.Unlock()
+	if !drift {
+		return
+	}
+
+	s.setupMu.Lock()
+	err := s.repairBackend(ctx)
+	s.setupMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.lastRepairError = err.Error()
+		s.log.Error().Err(err).Msg("automatic firewall drift repair failed")
+		return
+	}
+	s.lastRepair = time.Now().UTC()
+	s.repairCount++
+	s.lastRepairError = ""
+	s.log.Warn().Uint64("repairs", s.repairCount).Msg("restored drifted GoBan firewall objects")
 }
 
 func decodeStrict(w http.ResponseWriter, r *http.Request, out any) error {

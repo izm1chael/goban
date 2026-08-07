@@ -1,0 +1,38 @@
+#include <tunables/global>
+
+/usr/bin/goban-enforcer flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  /usr/bin/goban-enforcer mr,
+  /etc/goban/ r,
+  /etc/goban/** r,
+
+  /run/goban-enforcer/ rw,
+  /run/goban-enforcer/** rwk,
+  /proc/@{pid}/status r,
+  /proc/sys/kernel/random/boot_id r,
+
+  # Compatibility backends perform one-time hook inspection/install through
+  # the distribution firewall utilities; hot-path set operations stay netlink.
+  /usr/sbin/iptables ixr,
+  /usr/sbin/ip6tables ixr,
+  /usr/sbin/nft ixr,
+  /usr/sbin/xtables-nft-multi ixr,
+  /usr/sbin/xtables-legacy-multi ixr,
+  /sbin/iptables ixr,
+  /sbin/ip6tables ixr,
+  /sbin/nft ixr,
+
+  capability net_admin,
+  network unix,
+  network netlink raw,
+  network inet,
+  network inet6,
+
+  deny /var/log/** rwklx,
+  deny /home/** rwklx,
+  deny /root/** rwklx,
+  deny /etc/** wklx,
+  deny /usr/** wkl,
+}

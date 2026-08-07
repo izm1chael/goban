@@ -22,6 +22,8 @@ for cmd in ip python3 curl setpriv; do command -v "$cmd" >/dev/null || { echo "m
 id nobody >/dev/null 2>&1 || { echo "integration test requires an unprivileged 'nobody' account" >&2; exit 77; }
 if [[ $BACKEND == iptables ]]; then
   for cmd in iptables ip6tables; do command -v "$cmd" >/dev/null || { echo "missing $cmd" >&2; exit 77; }; done
+else
+  command -v nft >/dev/null || { echo "missing nft" >&2; exit 77; }
 fi
 
 if [[ ! -x $DAEMON || ! -x $ENFORCER || ! -x $CLIENT ]]; then
@@ -140,6 +142,7 @@ enforcer:
   mode: split
   socket_path: $tmp/enforcer.sock
   allowed_user: nobody
+  reconcile_interval: 1s
 banner:
   backend: $BACKEND
   iptables_chains: [INPUT, FORWARD]
@@ -307,6 +310,35 @@ if ip netns exec "$attacker_ns" "${curl_cmd[@]}" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Simulate an external firewall manager deleting GoBan's packet-path hook. The
+# helper must detect the drift, restore only its owned objects, preserve the
+# active decision, and block the attacker again without restarting either
+# process.
+if [[ $BACKEND == iptables ]]; then
+  hook_chain=INPUT; [[ $PATH_MODE == forward ]] && hook_chain=FORWARD
+  hook_bin=iptables; hook_set="goban-it-v4-$suffix"
+  if [[ $FAMILY == 6 ]]; then hook_bin=ip6tables; hook_set="goban-it-v6-$suffix"; fi
+  "$hook_bin" -D "$hook_chain" -m set --match-set "$hook_set" src -j DROP
+else
+  nft flush chain inet "goban_it_$suffix" "$PATH_MODE"
+fi
+repaired=false
+for _ in $(seq 1 120); do
+  health=$(curl --silent --unix-socket "$tmp/enforcer.sock" http://localhost/v1/health || true)
+  if python3 - "$health" <<'PYREPAIR' >/dev/null 2>&1
+import json,sys
+try: d=json.loads(sys.argv[1])
+except Exception: raise SystemExit(1)
+raise SystemExit(0 if d.get('repair_count',0) >= 1 and not d.get('last_repair_error') else 1)
+PYREPAIR
+  then
+    if ! ip netns exec "$attacker_ns" "${curl_cmd[@]}" >/dev/null 2>&1; then repaired=true; break; fi
+  fi
+  sleep 0.05
+done
+$repaired || { cat "$tmp/enforcer.log" >&2; echo "automatic firewall drift repair did not restore enforcement" >&2; exit 1; }
+"$CLIENT" --sock "$tmp/goban.sock" --json list | grep -Fq ""$attacker_addr"" || { echo "drift repair lost active ban metadata" >&2; exit 1; }
+
 "$CLIENT" --sock "$tmp/goban.sock" doctor --probe --probe-ip "${GOBAN_PROBE_IP:-192.0.2.254}" >/dev/null
 "$CLIENT" --sock "$tmp/goban.sock" explain "$attacker_addr"
 
@@ -335,4 +367,4 @@ for field in CapEff CapBnd CapAmb; do
   [[ $(awk -v f="$field:" '$1==f{print $2}' "/proc/$daemon_pid/status") == 0000000000000000 ]] || { echo "detector $field changed after helper recovery" >&2; exit 1; }
 done
 
-echo "PASS: $BACKEND $PATH_MODE IPv$FAMILY split enforcement + peer auth + transactional reload + helper recovery + TTL refresh"
+echo "PASS: $BACKEND $PATH_MODE IPv$FAMILY split enforcement + peer auth + transactional reload + drift self-heal + helper recovery + TTL refresh"
