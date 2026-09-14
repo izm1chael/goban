@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/coreos/go-systemd/v22 v22.7.0
-	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.5.1
 	github.com/rs/zerolog v1.35.1
 	golang.org/x/sys v0.47.0
