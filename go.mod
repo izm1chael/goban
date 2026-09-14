@@ -1,13 +1,13 @@
 module github.com/izm1chael/goban
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1
 	github.com/rs/zerolog v1.35.1
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
